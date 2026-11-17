@@ -60,3 +60,34 @@ def test_ls_tree_and_read_blobs(make_repo) -> None:
     sha = b.commit({"pkg/a.py": "import os\n"})
     tree = b.repo.ls_tree(sha)
     assert b.repo.read_blobs([tree["pkg/a.py"]])[tree["pkg/a.py"]] == b"import os\n"
+
+
+def test_changed_files_paths_with_space_and_non_ascii(make_repo) -> None:
+    b = make_repo()
+    base = b.commit({"src/a b.py": "1\n2\n", "src/ünï.py": "x\n"})
+    head = b.commit({"src/a b.py": "1\n2\n3\n", "src/ünï.py": "x\ny\n"})
+    by = {c.path: c for c in b.repo.changed_files(base, head)}
+    for path in ("src/a b.py", "src/ünï.py"):
+        assert (by[path].additions, by[path].deletions) == (1, 0)
+    assert by["src/a b.py"].hunks == [(3, 3)]
+    assert by["src/ünï.py"].hunks == [(2, 2)]
+
+
+def test_show_unresolvable_rev_raises(make_repo) -> None:
+    b = make_repo()
+    sha = b.commit({"a.py": "1\n"})
+    assert b.repo.show(sha, "a.py") == "1\n"
+    assert b.repo.show(sha, "nope.py") is None
+    with pytest.raises(GitError):
+        b.repo.show("0" * 40, "a.py")
+
+
+def test_hunks_ignore_plus_plus_plus_content_and_diff_prefix_config(make_repo) -> None:
+    b = make_repo()
+    b._git("config", "diff.noprefix", "true")
+    base = b.commit({"a.py": "1\n2\n", "b.py": "x\n"})
+    head = b.commit({"a.py": "1\n2\n++ not a header\n", "b.py": "x\ny\n"})
+    by = {c.path: c for c in b.repo.changed_files(base, head)}
+    assert by["a.py"].hunks == [(3, 3)] and by["a.py"].additions == 1
+    assert by["b.py"].hunks == [(2, 2)] and by["b.py"].additions == 1
+    assert set(by) == {"a.py", "b.py"}

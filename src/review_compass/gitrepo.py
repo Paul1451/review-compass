@@ -100,13 +100,21 @@ class GitRepo:
     def _hunks(self, base: str, head: str) -> dict[str, list[tuple[int, int]]]:
         out: dict[str, list[tuple[int, int]]] = {}
         current: list[tuple[int, int]] | None = None
-        for line in self._text("diff", "-M", "-U0", "--no-color", base, head).splitlines():
-            if line.startswith("+++ "):
-                target = line[4:]
+        in_header = False
+        diff = self._text(
+            "diff", "-M", "-U0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", base, head
+        )
+        for line in diff.splitlines():
+            if line.startswith("diff --git "):
+                in_header, current = True, None
+            elif in_header and line.startswith("+++ "):
+                # git appends a TAB to the name when the path contains whitespace
+                target = line[4:].removesuffix("\t")
                 current = out.setdefault(target[2:], []) if target.startswith("b/") else None
-            elif line.startswith("@@") and current is not None:
+            elif line.startswith("@@"):
+                in_header = False
                 m = _HUNK_RE.match(line)
-                if m:
+                if m and current is not None:
                     start = int(m.group(1))
                     length = int(m.group(2)) if m.group(2) is not None else 1
                     if length > 0:
@@ -114,10 +122,11 @@ class GitRepo:
         return out
 
     def show(self, rev: str, path: str) -> str | None:
-        try:
-            return self._text("show", f"{rev}:{path}")
-        except GitError:
+        """File content at rev; None only if rev is a commit lacking the path."""
+        self._run("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+        if not self._run("ls-tree", "-z", rev, "--", path):
             return None
+        return self._text("show", f"{rev}:{path}")
 
     def ls_tree(self, rev: str) -> dict[str, str]:
         tree: dict[str, str] = {}
