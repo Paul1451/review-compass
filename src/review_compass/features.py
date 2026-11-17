@@ -25,19 +25,36 @@ AGENT_NAMES = (
     "jules",
     "gemini",
 )
-_CO_AUTHOR_RE = re.compile(r"^\s*co-authored-by:\s*(.*?)\s*<", re.IGNORECASE | re.MULTILINE)
+_CO_AUTHOR_RE = re.compile(r"^\s*co-authored-by:\s*(.*?)\s*<([^>]*)>", re.IGNORECASE | re.MULTILINE)
 _BODY_MARKER = "Generated with [Claude Code]"
+_AGENT_RES = {a: re.compile(rf"(?<![a-z0-9]){a}(?![a-z0-9])", re.IGNORECASE) for a in AGENT_NAMES}
+_AGENT_DOMAINS = frozenset(
+    {"anthropic.com", "openai.com", "cursor.com", "aider.chat", "google.com", "devin.ai"}
+    | {"cognition.ai"}
+)
+_NOREPLY_DOMAIN = "users.noreply.github.com"
+_NOREPLY_PREFIX_RE = re.compile(r"^\d+\+")
 
 
 def _agent_in(text: str) -> str | None:
-    lowered = text.lower()
-    return next((a for a in AGENT_NAMES if a in lowered), None)
+    return next((a for a, pattern in _AGENT_RES.items() if pattern.search(text)), None)
+
+
+def _agent_email(email: str) -> bool:
+    local, _, domain = email.strip().lower().rpartition("@")
+    if domain in _AGENT_DOMAINS:
+        return True
+    if domain == _NOREPLY_DOMAIN:
+        bare = _NOREPLY_PREFIX_RE.sub("", local)
+        if bare in AGENT_NAMES or bare.endswith("[bot]"):
+            return True
+    return "[bot]" in local
 
 
 def detect_agent(meta: PRMeta, commit_messages: Sequence[str]) -> str | None:
     for message in commit_messages:
-        for name in _CO_AUTHOR_RE.findall(message):
-            if _agent_in(name):
+        for name, email in _CO_AUTHOR_RE.findall(message):
+            if _agent_in(name) and _agent_email(email):
                 return f"Co-Authored-By: {name}"
     if _BODY_MARKER in meta.body:
         return "PR body: Generated with Claude Code"
@@ -69,23 +86,30 @@ def extract_features(
     emails = repo.author_emails(base, meta.head_sha)
     touched = repo.touched_before(base, emails, queried)
 
-    dependents = index.dependents(base, [p for p in queried if p in tree])
+    # Supported-ness follows the path as it exists at base, so a source file renamed
+    # to a non-source name still counts. A PR without any such file has no dependents data.
+    dependents = index.dependents(base, [p for p in queried if p in tree]) or {}
 
     files: list[FileFeatures] = []
     union: set[str] = set()
+    source_supported = False
     for c in changes:
         query = base_path[c.path]
+        kind = classify(c.path)
+        if c.old_path is not None and classify(c.old_path) is FileKind.SOURCE:
+            kind = FileKind.SOURCE
         deps: int | None = None
-        if dependents is not None and c.path.endswith(SUPPORTED_EXTENSIONS):
+        if query.endswith(SUPPORTED_EXTENSIONS):
             found = dependents.get(query, set()) - diff_paths
             union |= found
             deps = len(found)
+            source_supported = source_supported or kind is FileKind.SOURCE
         files.append(
             FileFeatures(
                 change=c,
-                kind=classify(c.path),
-                sensitive=policy.is_sensitive(c.path),
-                guard=policy.is_guard(c.path),
+                kind=kind,
+                sensitive=any(policy.is_sensitive(p) for p in (c.path, c.old_path) if p),
+                guard=any(policy.is_guard(p) for p in (c.path, c.old_path) if p),
                 dependents=deps,
                 churn_90d=churn[query],
                 existed_at_base=existed[c.path],
@@ -107,7 +131,7 @@ def extract_features(
         ),
         source_changed=any(f.change.additions + f.change.deletions > 0 for f in source),
         tests_changed=FileKind.TEST in kinds,
-        dependents_total=None if dependents is None else len(union),
+        dependents_total=len(union) if source_supported else None,
         max_churn=max((f.churn_90d for f in source), default=0),
         unfamiliar_share=unfamiliar / len(known_source) if known_source else 0.0,
         directories=len(
