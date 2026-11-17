@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json as jsonlib
+import math
 import re
 import time
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -48,6 +50,8 @@ class GitHubClient:
         if not _REPO_RE.match(repo):
             raise ValueError("repo must look like 'owner/name'")
         self._repo = repo
+        base = urlsplit(base_url)
+        self._origin = (base.scheme, base.netloc)
         self._bot_login = bot_login
         self._sleep = sleep
         self._client = httpx.Client(
@@ -93,17 +97,20 @@ class GitHubClient:
     def _pages(self, path: str) -> list[Any]:
         """All items of a paginated listing (per_page=100, at most 10 pages)."""
         items: list[Any] = []
-        url: str | None = path
+        url = path
         params: dict[str, Any] | None = {"per_page": 100}
         for _ in range(_MAX_PAGES):
-            if url is None:
-                break
             response = self._request("GET", url, params=params)
             items.extend(response.json())
             match = _NEXT_LINK_RE.search(response.headers.get("Link", ""))
-            url = match.group(1) if match else None
+            if match is None:
+                return items
+            url = match.group(1)
+            parts = urlsplit(url)
+            if parts.netloc and (parts.scheme, parts.netloc) != self._origin:
+                raise GitHubError("refusing to follow pagination link to another host", 0)
             params = None
-        return items
+        raise GitHubError(f"pagination cap reached: GET {path}", 0)
 
     def _path(self, suffix: str) -> str:
         return f"/repos/{self._repo}{suffix}"
@@ -170,31 +177,47 @@ class GitHubClient:
         )
 
     def dismiss_own_approvals(self, pr: int, message: str) -> None:
+        if not message:
+            raise ValueError("dismissal message must not be empty")
+        first_error: GitHubError | None = None
         for review in self._pages(self._path(f"/pulls/{int(pr)}/reviews")):
             if (
                 review.get("state") == "APPROVED"
                 and (review.get("user") or {}).get("login") == self._bot_login
             ):
-                self._request(
-                    "PUT",
-                    self._path(f"/pulls/{int(pr)}/reviews/{int(review['id'])}/dismissals"),
-                    json={"message": message},
-                )
+                try:
+                    self._request(
+                        "PUT",
+                        self._path(f"/pulls/{int(pr)}/reviews/{int(review['id'])}/dismissals"),
+                        json={"message": message},
+                    )
+                except GitHubError as error:
+                    first_error = first_error or error
+        if first_error is not None:
+            raise first_error
 
     def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
         response = self._request("POST", "/graphql", json={"query": query, "variables": variables})
-        payload = response.json()
+        try:
+            payload = response.json()
+        except (ValueError, jsonlib.JSONDecodeError):
+            payload = None
+        if not isinstance(payload, dict):
+            raise GitHubError("invalid GraphQL response", response.status_code)
         errors = payload.get("errors")
         if errors:
             first = errors[0] if isinstance(errors[0], dict) else {}
             detail = str(first.get("type") or first.get("message") or "unknown")[:120]
             raise GitHubError(f"POST /graphql returned an error: {detail}", response.status_code)
         data = payload.get("data")
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise GitHubError("invalid GraphQL response", response.status_code)
+        return data
 
 
 def _retry_after(response: httpx.Response) -> float | None:
     try:
-        return float(response.headers["Retry-After"])
+        value = float(response.headers["Retry-After"])
     except (KeyError, ValueError):
         return None
+    return value if math.isfinite(value) and value >= 0 else None

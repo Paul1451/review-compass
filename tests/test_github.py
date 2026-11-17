@@ -203,3 +203,124 @@ def test_invalid_repo_and_repr_hides_token() -> None:
     with pytest.raises(ValueError):
         GitHubClient("tok", "a/b/../c")
     assert "tok" not in repr(GitHubClient("tok", "o/r"))
+
+
+def _paged_reviews(total_pages: int) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params.get("page", "1"))
+        headers = {}
+        if page < total_pages:
+            nxt = f"https://api.github.com/repos/o/r/pulls/5/reviews?page={page + 1}"
+            headers["Link"] = f'<{nxt}>; rel="next"'
+        return httpx.Response(200, json=[], headers=headers)
+
+    return handler
+
+
+def test_pagination_cap_fails_closed() -> None:
+    client, _ = make({("GET", "/repos/o/r/pulls/5/reviews"): _paged_reviews(11)})
+    with pytest.raises(GitHubError, match="pagination cap reached: GET") as info:
+        client.dismiss_own_approvals(5, "stale")
+    assert info.value.status == 0
+
+
+def test_exactly_ten_pages_is_fine() -> None:
+    client, rec = make({("GET", "/repos/o/r/pulls/5/reviews"): _paged_reviews(10)})
+    client.dismiss_own_approvals(5, "stale")
+    assert len(rec.methods("GET")) == 10
+
+
+def test_pagination_refuses_other_host() -> None:
+    hosts: list[str] = []
+
+    def evil(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        link = '<https://evil.example/steal?page=2>; rel="next"'
+        return httpx.Response(200, json=[], headers={"Link": link})
+
+    client = GitHubClient("tok", "o/r", transport=httpx.MockTransport(evil))
+    with pytest.raises(GitHubError, match="another host") as info:
+        client.upsert_comment(5, MARKER)
+    assert info.value.status == 0
+    assert "evil.example" not in hosts
+
+
+def test_dismiss_attempts_all_then_raises() -> None:
+    reviews = [{"id": i, "state": "APPROVED", "user": {"login": BOT}} for i in (1, 2, 3)]
+
+    def dismiss(request: httpx.Request) -> httpx.Response:
+        status = 500 if request.url.path.endswith("/1/dismissals") else 200
+        return httpx.Response(status, json={})
+
+    routes: dict[tuple[str, str], Any] = {("GET", "/repos/o/r/pulls/5/reviews"): (200, reviews)}
+    for i in (1, 2, 3):
+        routes[("PUT", f"/repos/o/r/pulls/5/reviews/{i}/dismissals")] = dismiss
+    client, rec = make(routes)
+    with pytest.raises(GitHubError) as info:
+        client.dismiss_own_approvals(5, "stale")
+    assert info.value.status == 500
+    assert len(rec.methods("PUT")) == 3
+
+
+def test_dismiss_empty_message_raises_before_request() -> None:
+    client, rec = make({})
+    with pytest.raises(ValueError):
+        client.dismiss_own_approvals(5, "")
+    assert rec.calls == []
+
+
+@pytest.mark.parametrize("value", ["-5", "abc", "inf", "nan"])
+def test_invalid_retry_after_is_not_retried(value: str) -> None:
+    slept: list[float] = []
+    client, rec = make(
+        {
+            ("GET", "/repos/o/r/issues/5/comments"): lambda r: httpx.Response(
+                429, headers={"Retry-After": value}
+            )
+        },
+        sleep=slept.append,
+    )
+    with pytest.raises(GitHubError):
+        client.upsert_comment(5, MARKER)
+    assert slept == [] and len(rec.calls) == 1
+
+
+def test_second_rate_limit_raises() -> None:
+    slept: list[float] = []
+    client, rec = make(
+        {
+            ("GET", "/repos/o/r/issues/5/comments"): lambda r: httpx.Response(
+                429, headers={"Retry-After": "1"}
+            )
+        },
+        sleep=slept.append,
+    )
+    with pytest.raises(GitHubError) as info:
+        client.upsert_comment(5, MARKER)
+    assert info.value.status == 429
+    assert slept == [1.0] and len(rec.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json=[1, 2]),
+        httpx.Response(200, json={"data": None}),
+    ],
+)
+def test_graphql_invalid_response_raises(response: httpx.Response) -> None:
+    client, _ = make({("POST", "/graphql"): lambda r: response})
+    with pytest.raises(GitHubError, match="invalid GraphQL response") as info:
+        client.graphql("q", {})
+    assert info.value.status == 200
+
+
+def test_token_never_leaks() -> None:
+    secret = "ghs_SECRETTOKEN123"
+    transport = httpx.MockTransport(lambda r: httpx.Response(403, json={"message": secret}))
+    client = GitHubClient(secret, "o/r", transport=transport)
+    assert secret not in repr(client)
+    with pytest.raises(GitHubError) as info:
+        client.upsert_comment(5, MARKER)
+    assert secret not in str(info.value) and secret not in repr(info.value)
