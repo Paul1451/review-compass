@@ -379,13 +379,20 @@ def test_dismiss_failure_warns(make_repo: RepoFactory) -> None:
 
 
 def test_malformed_payloads_exit_2(tmp_path: Path) -> None:
-    for event in (
-        [],  # type: ignore[list-item]
-        {"pull_request": []},
-        {"pull_request": {"number": 1, "user": "x", "head": {}, "base": {}}},
-    ):
+    user_str = {"pull_request": {"number": 1, "user": "x", "head": {}, "base": {}}}
+    sha_only = {
+        "pull_request": {"number": 1, "user": "x", "head": {"sha": "a"}, "base": {"sha": "b"}}
+    }
+    cases: list[tuple[Any, str]] = [
+        ([], "Malformed pull_request event"),
+        ({"pull_request": []}, "Malformed pull_request event"),
+        ({"pull_request": "x"}, "Malformed pull_request event"),
+        ({"pull_request": None}, "Malformed pull_request event"),
+        (user_str, "Malformed pull_request event"),
+        (sha_only, "Malformed pull_request event"),
+        ({"action": "push"}, "Not a pull_request event"),
+    ]
+    for event, message in cases:
         out = run_pr(event, tmp_path, None, None)
         assert out.exit_code == 2
-        assert out.summary in ("Malformed pull_request event", "Not a pull_request event")
-    bad = {"pull_request": {"number": 1, "user": "x", "head": {"sha": "a"}, "base": {"sha": "b"}}}
-    assert run_pr(bad, tmp_path, None, None).summary == "Malformed pull_request event"
+        assert out.summary == message

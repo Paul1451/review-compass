@@ -1,6 +1,7 @@
 """CLI tests: score and pr entry points."""
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -110,22 +111,52 @@ def test_brief_client_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(client, _Recorder) and client.args == ("k",)
 
 
-def test_stdout_neutralises_workflow_commands(
-    make_repo: Callable[[], RepoBuilder],
+def _run_pr_stdout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-) -> None:
-    summary_text = "line\n::error::x\nok ::notice::y"
-    monkeypatch.setattr(
-        cli, "run_pr", lambda *a, **k: LiveResult(exit_code=0, summary=summary_text)
-    )
+    summary_text: str,
+) -> tuple[list[str], Path]:
+    result = LiveResult(exit_code=0, summary=summary_text)
+    monkeypatch.setattr(cli, "run_pr", lambda *a, **k: result)
     event_file = tmp_path / "e.json"
     event_file.write_text("{}")
     summary_file = tmp_path / "s.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
     assert cli.main(["pr", "--event", str(event_file), "--repo-dir", str(tmp_path)]) == 0
-    out = capsys.readouterr().out
-    assert " ::error::x" in out.splitlines()
-    assert "ok ::notice::y" in out.splitlines()
-    assert "\n::error::x" in summary_file.read_text()
+    return capsys.readouterr().out.split("\n"), summary_file
+
+
+HOSTILE = "line\n::error::x\n   ::add-mask::y\nend"
+
+
+def test_actions_stdout_wrapped_in_stop_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    lines, summary_file = _run_pr_stdout(tmp_path, monkeypatch, capsys, HOSTILE)
+    match = re.fullmatch(r"::stop-commands::([0-9a-f]{32})", lines[0])
+    assert match is not None
+    token = match.group(1)
+    body = [line for line in lines if line]
+    assert body[-1] == f"::{token}::"
+    assert lines[1:5] == HOSTILE.split("\n")
+    assert token not in HOSTILE
+    assert summary_file.read_text() == HOSTILE + "\n"
+
+
+def test_actions_stop_commands_token_differs_per_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    first, _ = _run_pr_stdout(tmp_path, monkeypatch, capsys, HOSTILE)
+    second, _ = _run_pr_stdout(tmp_path, monkeypatch, capsys, HOSTILE)
+    assert first[0] != second[0]
+
+
+def test_stdout_verbatim_outside_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lines, _ = _run_pr_stdout(tmp_path, monkeypatch, capsys, HOSTILE)
+    assert lines == HOSTILE.split("\n") + [""]
+    assert not any(line.startswith("::stop-commands::") for line in lines)

@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import secrets
 import subprocess
 import sys
 import traceback
@@ -34,9 +35,14 @@ def _github_client() -> GitHubClient | None:
     return GitHubClient(token, repo)
 
 
-def _stdout_safe(text: str) -> str:
-    """A stdout line starting with `::` would be read as a workflow command; defuse it."""
-    return "\n".join(" " + line if line.startswith("::") else line for line in text.split("\n"))
+def _stdout_text(text: str) -> str:
+    """In GitHub Actions, stop the runner from parsing `::` lines in the echoed summary."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return text
+    token = secrets.token_hex(16)
+    while token in text:
+        token = secrets.token_hex(16)
+    return f"::stop-commands::{token}\n{text}\n::{token}::"
 
 
 def _cmd_pr(args: argparse.Namespace) -> int:
@@ -54,7 +60,7 @@ def _cmd_pr(args: argparse.Namespace) -> int:
     if summary_file:
         with open(summary_file, "a", encoding="utf-8") as handle:
             handle.write(outcome.summary + "\n")
-    print(_stdout_safe(outcome.summary))
+    print(_stdout_text(outcome.summary))
     return outcome.exit_code
 
 

@@ -42,9 +42,11 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 def meta_from_event(event: Mapping[str, Any]) -> PRMeta:
     if not isinstance(event, Mapping):
         raise ValueError("payload is not a mapping")
-    pr = event.get("pull_request")
-    if not isinstance(pr, Mapping):
+    if "pull_request" not in event:
         raise NotPullRequestEvent("Not a pull_request event")
+    pr = event["pull_request"]
+    if not isinstance(pr, Mapping):
+        raise ValueError("pull_request is not a mapping")
     user = _mapping(pr.get("user"))
     head = _mapping(pr.get("head"))
     base = _mapping(pr.get("base"))
