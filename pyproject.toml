@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
     "pyyaml",
-    "pathspec",
+    "pathspec>=0.12",
     "httpx",
     "anthropic",
 ]

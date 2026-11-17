@@ -752,7 +752,7 @@ dev = [
 requires-dist = [
     { name = "anthropic" },
     { name = "httpx" },
-    { name = "pathspec" },
+    { name = "pathspec", specifier = ">=0.12" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml" },
 ]

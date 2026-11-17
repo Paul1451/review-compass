@@ -56,3 +56,10 @@ def test_empty_file_is_defaults() -> None:
 
 def test_fingerprint_changes_with_weights() -> None:
     assert load_policy(None).fingerprint() != load_policy("weights: {size: 14}").fingerprint()
+
+
+def test_user_negation_cannot_cancel_builtin_or_guard() -> None:
+    p = load_policy('sensitive_paths: ["!.github/workflows/**", "!**/auth/**"]')
+    assert p.is_sensitive(".github/workflows/ci.yml")
+    assert p.is_sensitive("src/auth/s.py")
+    assert p.is_guard(".github/workflows/ci.yml")

@@ -90,8 +90,12 @@ class Policy(_PolicyModel):
         return _spec(tuple(GUARD_PATHS)).match_file(path)
 
     def is_sensitive(self, path: str) -> bool:
-        patterns = (*DEFAULT_SENSITIVE_PATHS, *GUARD_PATHS, *self.sensitive_paths)
-        return _spec(patterns).match_file(path)
+        # Separate specs: a user negation must never cancel a built-in or guard match.
+        return (
+            _spec(tuple(DEFAULT_SENSITIVE_PATHS)).match_file(path)
+            or self.is_guard(path)
+            or _spec(tuple(self.sensitive_paths)).match_file(path)
+        )
 
     def fingerprint(self) -> str:
         canonical = {
