@@ -81,3 +81,21 @@ def make_repo(tmp_path: Path) -> Callable[[], RepoBuilder]:
         return RepoBuilder(path)
 
     return factory
+
+
+_ISOLATED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "GITHUB_TOKEN",
+    "GITHUB_REPOSITORY",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_EVENT_PATH",
+    "REVIEW_COMPASS_BOT_LOGIN",
+    "REVIEW_COMPASS_DEBUG",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may see credentials or Actions variables from the developer's shell."""
+    for name in _ISOLATED_ENV:
+        monkeypatch.delenv(name, raising=False)

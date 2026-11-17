@@ -324,3 +324,20 @@ def test_token_never_leaks() -> None:
     with pytest.raises(GitHubError) as info:
         client.upsert_comment(5, MARKER)
     assert secret not in str(info.value) and secret not in repr(info.value)
+
+
+def test_transport_error_becomes_github_error_status_0() -> None:
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("secret detail", request=request)
+
+    client = GitHubClient("tok", "o/r", transport=httpx.MockTransport(boom))
+    with pytest.raises(GitHubError) as info:
+        client.upsert_comment(1, MARKER + "x")
+    assert info.value.status == 0
+    assert "secret detail" not in str(info.value)
+    assert str(info.value).startswith("network error: GET /repos/o/r/issues/1/comments")
+
+
+def test_head_sha() -> None:
+    client, rec = make({("GET", "/repos/o/r/pulls/5"): (200, {"head": {"sha": "abc"}})})
+    assert client.head_sha(5) == "abc"

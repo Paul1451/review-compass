@@ -16,9 +16,13 @@ LINES = "".join(f"x{i} = {i}\n" for i in range(300))
 
 
 class FakeGH:
-    def __init__(self, fail: dict[str, int] | None = None) -> None:
+    def __init__(
+        self, fail: dict[str, int] | None = None, head: str | Exception | None = None
+    ) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.fail = fail or {}
+        self.head = head
+        self.issues_error: Exception | None = None
 
     def _record(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -33,7 +37,17 @@ class FakeGH:
 
     def linked_issues(self, pr_body: str) -> list[Any]:
         self.calls.append(("linked_issues", (pr_body,)))
+        if self.issues_error is not None:
+            raise self.issues_error
         return []
+
+    def head_sha(self, pr: int) -> str:
+        self.calls.append(("head_sha", (pr,)))
+        if isinstance(self.head, Exception):
+            raise self.head
+        if self.head is None:
+            raise AssertionError("FakeGH.head not configured")
+        return self.head
 
     def upsert_comment(self, pr: int, body: str) -> None:
         self._record("upsert_comment", pr, body)
@@ -118,7 +132,7 @@ def test_auto_approve_only_when_low_and_enabled(make_repo: RepoFactory) -> None:
         "src/auth/x.py": "x = 0\n",
     }
     path, base, head = build(make_repo, base_files, {"README.md": "b\n"})
-    gh = FakeGH()
+    gh = FakeGH(head=head)
     out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
     assert out.result is not None and out.result.bucket == "low"
     assert gh.args("approve") == [
@@ -260,3 +274,118 @@ def test_null_body(make_repo: RepoFactory) -> None:
     out = run_pr(event_for(base, head, body=None), path, FakeGH(), None)  # type: ignore[arg-type]
     assert out.exit_code == 0
     assert meta_from_event(event_for(base, head, body=None)).body == ""
+
+
+APPROVE_POLICY: dict[str, str | bytes | None] = {
+    ".review-compass.yml": "auto_approve: true\n",
+    "README.md": "a\n",
+}
+
+
+def test_draft_never_auto_approved_when_not_skipped(make_repo: RepoFactory) -> None:
+    files: dict[str, str | bytes | None] = {
+        ".review-compass.yml": "auto_approve: true\nskip_drafts: false\n",
+        "README.md": "a\n",
+    }
+    path, base, head = build(make_repo, files, {"README.md": "b\n"})
+    gh = FakeGH(head=head)
+    out = run_pr(event_for(base, head, draft=True), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket == "low"
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+    assert gh.args("upsert_comment") and gh.args("set_bucket_label")
+
+
+def test_transport_error_in_comment_still_dismisses(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
+    gh = FakeGH(fail={"upsert_comment": 0})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert gh.args("dismiss_own_approvals")
+    assert "HTTP 0" not in out.summary
+    assert "upsert_comment refused" in out.summary
+
+
+def test_linked_issues_failure_continues(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
+    gh = FakeGH()
+    gh.issues_error = GitHubError("network error: GET /x", 0)
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert gh.args("upsert_comment")
+
+
+def test_head_changed_skips_approval_and_dismissal(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(head="f" * 40)
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert not gh.args("approve")
+    assert not gh.args("dismiss_own_approvals")
+    assert "> Note: pull request head changed during the run; approval skipped." in out.summary
+
+
+def test_head_unchanged_approves_current_head(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert [a[1] for a in gh.args("approve")] == [head]
+    names = gh.names()
+    assert names.index("head_sha") < names.index("approve")
+
+
+def test_head_sha_failure_means_no_approval(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(head=GitHubError("network error: GET /pulls/7", 0))
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert not gh.args("approve")
+    assert not gh.args("dismiss_own_approvals")
+    assert "approval skipped" in out.summary
+
+
+def test_label_failure_blocks_approval_and_dismisses(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
+    gh = FakeGH(fail={"set_bucket_label": 403})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+    assert "HTTP 403" in out.summary
+
+
+def test_label_failure_blocks_approval_when_eligible(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(fail={"set_bucket_label": 403}, head=head)
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert not gh.args("approve")
+    assert "HTTP 403" in out.summary
+
+
+def test_approve_failure_warns(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(fail={"approve": 422}, head=head)
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert "HTTP 422" in out.summary
+
+
+def test_dismiss_failure_warns(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
+    gh = FakeGH(fail={"dismiss_own_approvals": 403})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert "HTTP 403" in out.summary
+
+
+def test_malformed_payloads_exit_2(tmp_path: Path) -> None:
+    for event in (
+        [],  # type: ignore[list-item]
+        {"pull_request": []},
+        {"pull_request": {"number": 1, "user": "x", "head": {}, "base": {}}},
+    ):
+        out = run_pr(event, tmp_path, None, None)
+        assert out.exit_code == 2
+        assert out.summary in ("Malformed pull_request event", "Not a pull_request event")
+    bad = {"pull_request": {"number": 1, "user": "x", "head": {"sha": "a"}, "base": {"sha": "b"}}}
+    assert run_pr(bad, tmp_path, None, None).summary == "Malformed pull_request event"

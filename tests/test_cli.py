@@ -74,3 +74,58 @@ def test_unexpected_error_prints_type_only(
     assert "internal error (RuntimeError)" in err
     assert "secret-token-123" not in err
     assert "Traceback" not in err
+
+
+class _Recorder:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+
+def test_github_client_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "GitHubClient", _Recorder)
+    assert cli._github_client() is None
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    assert cli._github_client() is None
+    monkeypatch.delenv("GITHUB_TOKEN")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    assert cli._github_client() is None
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    client = cli._github_client()
+    assert isinstance(client, _Recorder)
+    assert client.args == ("t", "o/r") and client.kwargs == {}
+    monkeypatch.setenv("REVIEW_COMPASS_BOT_LOGIN", "me[bot]")
+    client = cli._github_client()
+    assert isinstance(client, _Recorder)
+    assert client.kwargs == {"bot_login": "me[bot]"}
+
+
+def test_brief_client_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "AnthropicBriefClient", _Recorder)
+    assert cli._brief_client() is None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    assert cli._brief_client() is None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    client = cli._brief_client()
+    assert isinstance(client, _Recorder) and client.args == ("k",)
+
+
+def test_stdout_neutralises_workflow_commands(
+    make_repo: Callable[[], RepoBuilder],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    summary_text = "line\n::error::x\nok ::notice::y"
+    monkeypatch.setattr(
+        cli, "run_pr", lambda *a, **k: LiveResult(exit_code=0, summary=summary_text)
+    )
+    event_file = tmp_path / "e.json"
+    event_file.write_text("{}")
+    summary_file = tmp_path / "s.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+    assert cli.main(["pr", "--event", str(event_file), "--repo-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert " ::error::x" in out.splitlines()
+    assert "ok ::notice::y" in out.splitlines()
+    assert "\n::error::x" in summary_file.read_text()

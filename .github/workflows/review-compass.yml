@@ -9,6 +9,10 @@ permissions:
   pull-requests: write
   issues: read
 
+concurrency:
+  group: review-compass-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review-compass:
     runs-on: ubuntu-latest

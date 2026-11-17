@@ -34,6 +34,11 @@ def _github_client() -> GitHubClient | None:
     return GitHubClient(token, repo)
 
 
+def _stdout_safe(text: str) -> str:
+    """A stdout line starting with `::` would be read as a workflow command; defuse it."""
+    return "\n".join(" " + line if line.startswith("::") else line for line in text.split("\n"))
+
+
 def _cmd_pr(args: argparse.Namespace) -> int:
     event_path = args.event or os.environ.get("GITHUB_EVENT_PATH", "")
     if not event_path:
@@ -49,7 +54,7 @@ def _cmd_pr(args: argparse.Namespace) -> int:
     if summary_file:
         with open(summary_file, "a", encoding="utf-8") as handle:
             handle.write(outcome.summary + "\n")
-    print(outcome.summary)
+    print(_stdout_safe(outcome.summary))
     return outcome.exit_code
 
 

@@ -17,6 +17,7 @@ from review_compass.scoring import score
 
 FETCH_DEPTH_HINT = "If this is GitHub Actions, set fetch-depth: 0 on actions/checkout."
 BRIEF_DIFF_FILES = 5
+HEAD_CHANGED_NOTE = "\n\n> Note: pull request head changed during the run; approval skipped."
 
 
 class LiveResult(BaseModel):
@@ -29,15 +30,26 @@ class NotPullRequestEvent(ValueError):
     pass
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    """A missing (None) section is empty; any other non-mapping makes the event malformed."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("expected a mapping")
+    return value
+
+
 def meta_from_event(event: Mapping[str, Any]) -> PRMeta:
+    if not isinstance(event, Mapping):
+        raise ValueError("payload is not a mapping")
     pr = event.get("pull_request")
     if not isinstance(pr, Mapping):
         raise NotPullRequestEvent("Not a pull_request event")
-    user = pr.get("user") or {}
-    head = pr.get("head") or {}
-    base = pr.get("base") or {}
-    head_repo = (head.get("repo") or {}).get("full_name")
-    base_repo = (base.get("repo") or {}).get("full_name")
+    user = _mapping(pr.get("user"))
+    head = _mapping(pr.get("head"))
+    base = _mapping(pr.get("base"))
+    head_repo = _mapping(head.get("repo")).get("full_name")
+    base_repo = _mapping(base.get("repo")).get("full_name")
     return PRMeta(
         number=int(pr["number"]),
         title=pr.get("title") or "",
@@ -89,7 +101,7 @@ def run_pr(
         meta = meta_from_event(event)
     except NotPullRequestEvent as error:
         return _error_result(str(error))
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         return _error_result("Malformed pull_request event")
 
     repo = GitRepo(repo_dir)
@@ -125,6 +137,7 @@ def run_pr(
         and result.bucket == "low"
         and not result.guard_touched
         and not any(f.sensitive for f in features.files)
+        and not meta.draft
     )
     first_error: GitHubError | None = None
     try:
@@ -139,20 +152,29 @@ def run_pr(
     # Never approve unless every earlier write succeeded; dismissing is always the safe half.
     try:
         if eligible and first_error is None:
-            gh.approve(
-                meta.number,
-                meta.head_sha,
-                f"Review Compass: low risk ({result.score}/100), auto-approved by policy.",
-            )
+            # A newer push may have superseded this run: the run for the new head decides.
+            try:
+                current_head: str | None = gh.head_sha(meta.number)
+            except GitHubError as error:
+                current_head = None
+                first_error = error
+            if current_head == meta.head_sha:
+                gh.approve(
+                    meta.number,
+                    meta.head_sha,
+                    f"Review Compass: low risk ({result.score}/100), auto-approved by policy.",
+                )
+            else:
+                summary += HEAD_CHANGED_NOTE
         elif not eligible:
             gh.dismiss_own_approvals(meta.number, "Review Compass: no longer low risk.")
     except GitHubError as error:
         first_error = first_error or error
 
     if first_error is not None:
+        detail = f"HTTP {first_error.status}" if first_error.status else str(first_error)
         summary += (
-            "\n\n> Warning: could not write to the pull request "
-            f"(HTTP {first_error.status}). Check workflow permissions."
+            f"\n\n> Warning: could not write to the pull request ({detail}). "
+            "Check workflow permissions."
         )
     return LiveResult(exit_code=0, summary=summary, result=result)
-

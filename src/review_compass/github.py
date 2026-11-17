@@ -82,7 +82,11 @@ class GitHubClient:
     ) -> httpx.Response:
         """Send a request; retry once on a short rate limit; raise on non-2xx."""
         for attempt in (0, 1):
-            response = self._client.request(method, path, json=json, params=params)
+            try:
+                response = self._client.request(method, path, json=json, params=params)
+            except httpx.HTTPError as exc:
+                # Never include the exception text: it can carry URLs or headers.
+                raise GitHubError(f"network error: {method} {path.split('?')[0]}", 0) from exc
             if response.is_success or response.status_code in ok_statuses:
                 return response
             status = response.status_code
@@ -168,6 +172,10 @@ class GitHubClient:
                 self._request(
                     "DELETE", self._path(f"/issues/{int(pr)}/labels/{quote(other, safe='')}")
                 )
+
+    def head_sha(self, pr: int) -> str:
+        data = self._request("GET", self._path(f"/pulls/{int(pr)}")).json()
+        return str((data.get("head") or {}).get("sha") or "")
 
     def approve(self, pr: int, head_sha: str, body: str) -> None:
         self._request(
