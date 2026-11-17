@@ -184,9 +184,7 @@ class GitRepo:
                     counts[p] += 1
         return counts
 
-    def touched_before(
-        self, rev: str, emails: set[str], paths: Sequence[str]
-    ) -> dict[str, bool]:
+    def touched_before(self, rev: str, emails: set[str], paths: Sequence[str]) -> dict[str, bool]:
         touched = {p: False for p in paths}
         if not paths:
             return touched
@@ -206,9 +204,7 @@ class GitRepo:
             return ""
         return self._text("diff", "-M", "--no-color", base, head, "--", *paths)
 
-    def log_between(
-        self, rev: str, since: datetime, until: datetime
-    ) -> list[tuple[str, str]]:
+    def log_between(self, rev: str, since: datetime, until: datetime) -> list[tuple[str, str]]:
         out = self._text(
             "log",
             "--format=%H%x01%B%x00",

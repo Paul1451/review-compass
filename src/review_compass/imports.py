@@ -125,9 +125,7 @@ class ImportIndex:
         if not targets:
             return None
         tree = {
-            p: sha
-            for p, sha in self._repo.ls_tree(rev).items()
-            if p.endswith(SUPPORTED_EXTENSIONS)
+            p: sha for p, sha in self._repo.ls_tree(rev).items() if p.endswith(SUPPORTED_EXTENSIONS)
         }
         specs = self._specifiers(tree)
         result: dict[str, set[str]] = {t: set() for t in targets}

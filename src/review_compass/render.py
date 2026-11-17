@@ -8,17 +8,30 @@ MARKER = "<!-- review-compass -->"
 
 _MAX_READ_FIRST = 5
 _MAX_SKIM_PATHS = 8
-_UNSAFE = re.compile(r"[`\x00-\x1f\x7f-\x9f  ]")
+# C0/C1 controls, line/paragraph separators, bidi controls, zero-width characters, BOM.
+_INVISIBLE = re.compile(
+    "[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]"
+)
 _WHITESPACE = re.compile(r"\s+")
+_MD_SPECIAL = re.compile(r"[\\`*_\[\]#!~|]")
+_WWW = re.compile(r"www\.", re.IGNORECASE)
+_ZWSP = "\u200b"
 
 
 def _clean_path(path: str) -> str:
-    """Strip backticks, newlines and control characters from an untrusted path."""
-    return _UNSAFE.sub("", path)
+    """Strip backticks, newlines and invisible characters from an untrusted path."""
+    cleaned = _INVISIBLE.sub("", path.replace("`", ""))
+    return cleaned or "(unnamed)"
 
 
-def _one_line(text: str) -> str:
-    return _WHITESPACE.sub(" ", text).strip()
+def _safe_text(text: str) -> str:
+    """Neutralise Markdown, HTML, mentions and autolinks in untrusted free text."""
+    out = _INVISIBLE.sub("", _WHITESPACE.sub(" ", text).strip())
+    out = out.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    out = _MD_SPECIAL.sub(lambda m: "\\" + m.group(0), out)
+    out = out.replace("@", "@" + _ZWSP)
+    out = out.replace("://", ":" + _ZWSP + "//")
+    return _WWW.sub(lambda m: m.group(0)[:3] + _ZWSP + ".", out)
 
 
 def _read_first_line(index: int, rank: FileRank, why: str | None) -> str:
@@ -34,10 +47,10 @@ def _read_first_line(index: int, rank: FileRank, why: str | None) -> str:
 def _intent_text(brief: Brief) -> str:
     intent = brief.intent
     if intent.status == "not_run":
-        return f"not run ({_one_line(intent.note)})"
+        return f"not run ({_safe_text(intent.note)})"
     if intent.status == "no_issue":
         return "no linked issue"
-    return _one_line(intent.note)
+    return _safe_text(intent.note)
 
 
 def render_comment(result: RiskResult, brief: Brief) -> str:
@@ -48,7 +61,7 @@ def render_comment(result: RiskResult, brief: Brief) -> str:
         "**Why**",
     ]
     if result.contributions:
-        lines.extend(f"- {_one_line(c.reason)} ({c.points:+d})" for c in result.contributions)
+        lines.extend(f"- {_safe_text(c.reason)} ({c.points:+d})" for c in result.contributions)
     else:
         lines.append("- nothing notable")
 
@@ -61,7 +74,7 @@ def render_comment(result: RiskResult, brief: Brief) -> str:
         shown = read_first[:_MAX_READ_FIRST]
         notes: dict[str, str] = {}
         for note in brief.reading_notes:
-            why = _one_line(note.why)
+            why = _safe_text(note.why)
             if why:
                 notes.setdefault(note.path, why)
         lines += ["", "**Read first**"]
@@ -80,7 +93,7 @@ def render_comment(result: RiskResult, brief: Brief) -> str:
         lines += ["", f"**Skim ({len(skim)} {noun})**", listed]
 
     if result.notes:
-        joined = "; ".join(_one_line(n) for n in result.notes)
+        joined = "; ".join(_safe_text(n) for n in result.notes)
         lines += ["", f"<sub>Notes: {joined}</sub>"]
 
     return "\n".join(lines) + "\n"

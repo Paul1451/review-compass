@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from review_compass.models import (
     Brief,
     Contribution,
@@ -125,3 +127,81 @@ def test_untrusted_path_cannot_break_out_of_code_span() -> None:
     out = render_comment(result, _plain_brief())
     assert "1. `ab**x**.py`" in out
     assert "`sk.md`" in out
+
+
+ZWSP = "​"
+
+HOSTILE = [
+    ("ping @someuser now", f"ping @{ZWSP}someuser now"),
+    ("[a](http://x)", f"\\[a\\](http:{ZWSP}//x)"),
+    ("![i](http://x)", None),
+    ("<!-- hide", "&lt;\\!-- hide"),
+    ("</sub><img src=x>", "&lt;/sub&gt;&lt;img src=x&gt;"),
+    ("see #12", "see \\#12"),
+    ("visit www.evil.example", f"visit www{ZWSP}.evil.example"),
+    ("a_b*c", "a\\_b\\*c"),
+]
+
+
+def _hostile_result(reason: str, note: str) -> RiskResult:
+    return RiskResult(
+        score=1,
+        bucket="low",
+        contributions=[Contribution(signal="s", points=1, reason=reason)],
+        files=[],
+        guard_touched=False,
+        notes=[note],
+    )
+
+
+@pytest.mark.parametrize(("raw", "expected"), HOSTILE)
+def test_hostile_reason_and_note_are_escaped(raw: str, expected: str | None) -> None:
+    out = render_comment(_hostile_result(raw, raw), _plain_brief())
+    reason_line = next(ln for ln in out.splitlines() if ln.startswith("- ") and "(+1)" in ln)
+    notes_line = next(ln for ln in out.splitlines() if ln.startswith("<sub>"))
+    if expected is None:
+        assert reason_line.startswith("- \\!\\[i\\]")
+        assert notes_line.startswith("<sub>Notes: \\!\\[i\\]")
+    else:
+        assert reason_line == f"- {expected} (+1)"
+        assert notes_line == f"<sub>Notes: {expected}</sub>"
+
+
+def test_hostile_note_cannot_close_sub_wrapper() -> None:
+    out = render_comment(_hostile_result("x", "</sub> boom </SUB>"), _plain_brief())
+    notes_line = next(ln for ln in out.splitlines() if ln.startswith("<sub>"))
+    assert notes_line.count("</sub>") == 1
+    assert notes_line.endswith("</sub>")
+
+
+def test_intent_note_and_reading_why_are_escaped() -> None:
+    brief = Brief(
+        intent=IntentCheck(status="extends", note="fixes #3 for @bob"),
+        reading_notes=[ReadingNote(path="a.py", why="see [x](http://y)")],
+    )
+    result = RiskResult(
+        score=1,
+        bucket="low",
+        contributions=[],
+        files=[_rank("a.py")],
+        guard_touched=False,
+        notes=[],
+    )
+    out = render_comment(result, brief)
+    assert f"fixes \\#3 for @{ZWSP}bob" in out
+    assert f"1. `a.py` — see \\[x\\](http:{ZWSP}//y)" in out
+
+
+def test_bidi_and_zero_width_chars_are_removed_from_paths() -> None:
+    result = RiskResult(
+        score=1,
+        bucket="low",
+        contributions=[],
+        files=[_rank("a‮b​c﻿.py"), _rank("`‮`")],
+        guard_touched=False,
+        notes=[],
+    )
+    out = render_comment(result, _plain_brief())
+    assert "1. `abc.py`" in out
+    assert "2. `(unnamed)`" in out
+    assert "‮" not in out

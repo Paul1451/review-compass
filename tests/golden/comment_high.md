@@ -6,7 +6,7 @@
 - source changed, no test changes (+18)
 
 **Intent check**
-Issue #31 asks for a logout fix. This PR also changes token lifetime.
+Issue \#31 asks for a logout fix. This PR also changes token lifetime.
 
 **Read first**
 1. `auth/session.py:88-140` — session invalidation rewritten
