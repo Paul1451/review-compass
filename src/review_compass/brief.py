@@ -4,6 +4,7 @@ The brief only fills text fields. It never feeds back into score, bucket or appr
 failure path degrades to ``IntentCheck("not_run", ...)`` without raising.
 """
 
+import json
 import re
 from collections.abc import Sequence
 from typing import Any, Literal, Protocol
@@ -13,8 +14,9 @@ from pydantic import BaseModel
 from review_compass.models import Brief, IntentCheck, Issue, PRMeta, ReadingNote, RiskResult
 from review_compass.policy import Policy
 
-TOOL_NAME = "submit_brief"
-MAX_OUTPUT_TOKENS = 1024
+# Non-streaming default from the claude-api skill (~16000, below SDK HTTP timeouts). Leaves room
+# for adaptive thinking (on by default on Haiku 5.5 and others) plus the short JSON answer.
+MAX_OUTPUT_TOKENS = 16000
 BODY_LIMIT = 4000
 READING_NOTE_FILES = 5
 CHARS_PER_TOKEN = 4
@@ -31,7 +33,7 @@ SYSTEM_PROMPT = (
     "issue asks (status matches, extends, unclear or no_issue, plus one short note); "
     "(2) for each file in the reading list, one short reason why a reviewer should look at it. "
     "Only mention files that appear in the diff. Write plain text without markup.\n"
-    f"Deliver the result only by calling the {TOOL_NAME} tool. Do not answer in any other way."
+    "Reply only with the JSON object described by the output schema."
 )
 
 BRIEF_SCHEMA: dict[str, Any] = {
@@ -47,6 +49,7 @@ BRIEF_SCHEMA: dict[str, Any] = {
                 "note": {"type": "string"},
             },
             "required": ["status", "note"],
+            "additionalProperties": False,
         },
         "reading_notes": {
             "type": "array",
@@ -54,10 +57,12 @@ BRIEF_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "why": {"type": "string"}},
                 "required": ["path", "why"],
+                "additionalProperties": False,
             },
         },
     },
     "required": ["intent", "reading_notes"],
+    "additionalProperties": False,
 }
 
 
@@ -68,7 +73,12 @@ class BriefClient(Protocol):
 
 
 class AnthropicBriefClient:
-    """The only code that talks to the Anthropic SDK."""
+    """The only code that talks to the Anthropic SDK.
+
+    Uses structured outputs (``output_config.format`` with a JSON schema), which the claude-api
+    skill lists as supported on Haiku 5.5, Sonnet 5.5, Opus 5.5 and Fable 5.x. Forced tool use is
+    rejected on several of those models, so it is not used.
+    """
 
     def __init__(self, api_key: str, client: Any = None) -> None:
         if client is None:
@@ -85,19 +95,15 @@ class AnthropicBriefClient:
             max_tokens=MAX_OUTPUT_TOKENS,
             system=system,
             messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": TOOL_NAME,
-                    "description": "Submit the intent check and the reading notes.",
-                    "input_schema": schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": TOOL_NAME},
+            output_config={"format": {"type": "json_schema", "schema": schema}},
         )
-        for block in response.content:
-            if block.type == "tool_use" and block.name == TOOL_NAME:
-                return dict(block.input)
-        raise ValueError("model did not call the brief tool")
+        text = next((b.text for b in response.content if b.type == "text"), None)
+        if text is None:
+            raise ValueError("model returned no text block")
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("model returned JSON that is not an object")
+        return data
 
 
 class _IntentPayload(BaseModel):

@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from review_compass.brief import AnthropicBriefClient, build_brief, sanitize
 from review_compass.models import FileRank, IntentCheck, Issue, PRMeta, ReadingNote, RiskResult
 from review_compass.policy import load_policy
@@ -114,7 +116,7 @@ def test_untrusted_parts_are_delimited_and_named_in_system_prompt() -> None:
     call = fc.calls[0]
     for tag in ("pr_title", "pr_body", "issue", "diff"):
         assert f"<{tag}" in call["user"] and f"<{tag}>" in call["system"]
-    assert "untrusted" in call["system"] and "submit_brief" in call["system"]
+    assert "untrusted" in call["system"] and "JSON" in call["system"]
     assert call["schema"]["properties"]["intent"]["properties"]["status"]["enum"] == [
         "matches",
         "extends",
@@ -137,29 +139,38 @@ def test_sanitize_limit() -> None:
 
 
 class FakeSDK:
-    def __init__(self) -> None:
+    def __init__(self, *blocks: Any) -> None:
         self.kwargs: dict[str, Any] = {}
+        self.blocks = blocks
         self.messages = SimpleNamespace(create=self._create)
 
     def _create(self, **kwargs: Any) -> Any:
         self.kwargs = kwargs
-        return SimpleNamespace(
-            content=[
-                SimpleNamespace(type="text", text="ignored"),
-                SimpleNamespace(type="tool_use", name="submit_brief", input={"k": "v"}),
-            ]
-        )
+        return SimpleNamespace(content=list(self.blocks))
 
 
-def test_anthropic_client_builds_forced_tool_request() -> None:
-    sdk = FakeSDK()
+def _text(text: str) -> Any:
+    return SimpleNamespace(type="text", text=text)
+
+
+def test_anthropic_client_builds_structured_output_request() -> None:
+    sdk = FakeSDK(SimpleNamespace(type="thinking", thinking=""), _text('{"k": "v"}'))
     schema: dict[str, Any] = {"type": "object", "properties": {}}
     out = AnthropicBriefClient("unused", client=sdk).complete(
         model="m-1", system="SYS", user="USR", schema=schema
     )
     assert out == {"k": "v"}
     kw = sdk.kwargs
-    assert kw["model"] == "m-1" and kw["max_tokens"] == 1024 and kw["system"] == "SYS"
+    assert kw["model"] == "m-1" and kw["max_tokens"] == 16000 and kw["system"] == "SYS"
     assert kw["messages"] == [{"role": "user", "content": "USR"}]
-    assert kw["tools"][0]["name"] == "submit_brief" and kw["tools"][0]["input_schema"] == schema
-    assert kw["tool_choice"] == {"type": "tool", "name": "submit_brief"}
+    assert kw["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
+    assert "tools" not in kw and "tool_choice" not in kw
+
+
+def test_anthropic_client_raises_without_usable_payload() -> None:
+    schema: dict[str, Any] = {"type": "object"}
+    bad = [[], [SimpleNamespace(type="thinking", thinking="")], [_text("{oops")], [_text("[1]")]]
+    for blocks in bad:
+        client = AnthropicBriefClient("unused", client=FakeSDK(*blocks))
+        with pytest.raises(ValueError):  # json.JSONDecodeError is a ValueError
+            client.complete(model="m", system="s", user="u", schema=schema)
