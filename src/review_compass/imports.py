@@ -173,8 +173,9 @@ class ImportIndex:
             blobs = self._repo.read_blobs(tree[path] for path in missing.values())
             for key, path in missing.items():
                 data = blobs.get(tree[path])
-                self._cache[key] = [] if data is None else _parse(path, data)
-        return {path: self._cache[key] for path, key in keyed.items()}
+                if data is not None:  # a missing blob must not poison the persistent cache
+                    self._cache[key] = _parse(path, data)
+        return {path: self._cache.get(key, []) for path, key in keyed.items()}
 
     @staticmethod
     def _resolve_js(base: str, tree: dict[str, str]) -> str | None:

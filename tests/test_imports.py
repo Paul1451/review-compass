@@ -112,3 +112,23 @@ def test_self_import_and_package_relative(make_repo) -> None:
     )
     deps = ImportIndex(b.repo).dependents(rev, ["pkg/a.py", "pkg/b.py"])
     assert deps == {"pkg/a.py": set(), "pkg/b.py": {"pkg/a.py"}}
+
+
+def test_missing_blob_is_not_cached(make_repo, monkeypatch, tmp_path) -> None:
+    b = make_repo()
+    rev = b.commit({"a.py": "X=1\n", "b.py": "import a\n"})
+    missing_sha = b.repo.ls_tree(rev)["b.py"]
+    real_read_blobs = b.repo.read_blobs
+
+    def read_without_b(shas):  # type: ignore[no-untyped-def]
+        return {s: d for s, d in real_read_blobs(shas).items() if s != missing_sha}
+
+    cache = tmp_path / "blobs.json"
+    idx = ImportIndex(b.repo, cache)
+    monkeypatch.setattr(b.repo, "read_blobs", read_without_b)
+    assert idx.dependents(rev, ["a.py"]) == {"a.py": set()}
+    idx.save()
+    assert not any(missing_sha in key for key in json.loads(cache.read_text()))
+
+    monkeypatch.setattr(b.repo, "read_blobs", real_read_blobs)
+    assert idx.dependents(rev, ["a.py"]) == {"a.py": {"b.py"}}
