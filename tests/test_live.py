@@ -1,0 +1,262 @@
+"""End-to-end tests of run_pr against throwaway repos and a fake GitHub client."""
+
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from conftest import RepoBuilder
+
+from review_compass.github import GitHubError
+from review_compass.live import meta_from_event, run_pr
+from review_compass.render import MARKER
+
+RepoFactory = Callable[[], RepoBuilder]
+
+LINES = "".join(f"x{i} = {i}\n" for i in range(300))
+
+
+class FakeGH:
+    def __init__(self, fail: dict[str, int] | None = None) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fail = fail or {}
+
+    def _record(self, name: str, *args: Any) -> None:
+        self.calls.append((name, args))
+        if name in self.fail:
+            raise GitHubError(f"{name} refused", self.fail[name])
+
+    def names(self) -> list[str]:
+        return [name for name, _ in self.calls]
+
+    def args(self, name: str) -> list[tuple[Any, ...]]:
+        return [a for n, a in self.calls if n == name]
+
+    def linked_issues(self, pr_body: str) -> list[Any]:
+        self.calls.append(("linked_issues", (pr_body,)))
+        return []
+
+    def upsert_comment(self, pr: int, body: str) -> None:
+        self._record("upsert_comment", pr, body)
+
+    def set_bucket_label(self, pr: int, bucket: str) -> None:
+        self._record("set_bucket_label", pr, bucket)
+
+    def approve(self, pr: int, head_sha: str, body: str) -> None:
+        self._record("approve", pr, head_sha, body)
+
+    def dismiss_own_approvals(self, pr: int, message: str) -> None:
+        self._record("dismiss_own_approvals", pr, message)
+
+
+class FakeBriefClient:
+    def complete(
+        self, *, model: str, system: str, user: str, schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {"intent": {"status": "unclear", "note": "n"}, "reading_notes": []}
+
+
+def event_for(base: str, head: str, **overrides: Any) -> dict[str, Any]:
+    pr: dict[str, Any] = {
+        "number": 7,
+        "title": "Change things",
+        "body": "Does a thing",
+        "user": {"login": "dev", "type": "User"},
+        "head": {"ref": "feature", "sha": head, "repo": {"full_name": "o/r"}},
+        "base": {"sha": base, "repo": {"full_name": "o/r"}},
+        "draft": False,
+    }
+    pr.update(overrides)
+    return {"pull_request": pr}
+
+
+def build(
+    make_repo: RepoFactory,
+    base_files: dict[str, str | bytes | None],
+    head_files: dict[str, str | bytes | None],
+) -> tuple[Path, str, str]:
+    repo = make_repo()
+    base = repo.commit(base_files, "base")
+    repo.branch("feature")
+    head = repo.commit(head_files, "head")
+    return repo.path, base, head
+
+
+def test_happy_path_posts_comment_and_label(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/app.py": LINES})
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, FakeBriefClient())  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert out.result is not None
+    comments = gh.args("upsert_comment")
+    assert len(comments) == 1
+    assert comments[0][1].startswith(MARKER)
+    assert gh.args("set_bucket_label") == [(7, out.result.bucket)]
+    assert gh.args("dismiss_own_approvals")
+    assert not gh.args("approve")
+
+
+def test_policy_read_from_base_not_head(make_repo: RepoFactory) -> None:
+    policy = "auto_approve: true\nthresholds: {medium: 98, high: 99}\n"
+    path, base, head = build(
+        make_repo, {"README.md": "a\n"}, {".review-compass.yml": policy, "src/a.py": "x = 1\n"}
+    )
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None
+    assert out.result.guard_touched
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+    # default thresholds (35/60), not the head's 98/99
+    assert out.result.bucket == ("low" if out.result.score < 35 else "medium")
+
+
+def test_auto_approve_only_when_low_and_enabled(make_repo: RepoFactory) -> None:
+    policy = "auto_approve: true\n"
+    base_files: dict[str, str | bytes | None] = {
+        ".review-compass.yml": policy,
+        "README.md": "a\n",
+        "src/auth/x.py": "x = 0\n",
+    }
+    path, base, head = build(make_repo, base_files, {"README.md": "b\n"})
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket == "low"
+    assert gh.args("approve") == [
+        (7, head, f"Review Compass: low risk ({out.result.score}/100), auto-approved by policy.")
+    ]
+    assert not gh.args("dismiss_own_approvals")
+
+    path, base, head = build(make_repo, base_files, {"src/auth/x.py": LINES})
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket != "low"
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+
+
+def test_auto_approve_blocked_by_guard_file(make_repo: RepoFactory) -> None:
+    path, base, head = build(
+        make_repo,
+        {".review-compass.yml": "auto_approve: true\n", ".github/workflows/ci.yml": "a: 1\n"},
+        {".github/workflows/ci.yml": "a: 2\n"},
+    )
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket == "low"
+    assert out.result.guard_touched
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+
+
+def test_auto_approve_blocked_by_sensitive_file(make_repo: RepoFactory) -> None:
+    path, base, head = build(
+        make_repo,
+        {
+            ".review-compass.yml": "auto_approve: true\n",
+            "src/auth/session.py": "a = 1\nb = 2\n",
+            "tests/test_session.py": "a = 1\nb = 2\n",
+        },
+        {
+            "src/auth/session.py": "a = 3\nb = 4\n",
+            "tests/test_session.py": "a = 3\nb = 4\n",
+        },
+    )
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket == "low"
+    assert not out.result.guard_touched
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+
+
+def test_draft_is_skipped(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    gh = FakeGH()
+    out = run_pr(event_for(base, head, draft=True), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert out.summary == "Skipped: draft pull request"
+    assert gh.calls == []
+
+
+def test_fork_writes_summary_only(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    ev = event_for(base, head)
+    ev["pull_request"]["head"]["repo"] = {"full_name": "someone/r"}
+    gh = FakeGH()
+    out = run_pr(ev, path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert "Fork pull request" in out.summary
+    assert set(gh.names()) <= {"linked_issues"}
+
+
+def test_deleted_fork_counts_as_fork(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    ev = event_for(base, head)
+    ev["pull_request"]["head"]["repo"] = None
+    assert meta_from_event(ev).is_fork
+    gh = FakeGH()
+    run_pr(ev, path, gh, None)  # type: ignore[arg-type]
+    assert set(gh.names()) <= {"linked_issues"}
+
+
+def test_invalid_base_policy_exits_2(make_repo: RepoFactory) -> None:
+    bad: dict[str, str | bytes | None] = {".review-compass.yml": "thresholds: nope\n"}
+    path, base, head = build(make_repo, bad, {"a.py": "1\n"})
+    gh = FakeGH()
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 2
+    assert out.summary.startswith("Invalid .review-compass.yml on base branch:")
+    assert gh.calls == []
+
+
+def test_shallow_clone_exits_2_with_hint(make_repo: RepoFactory) -> None:
+    path, _, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    gh = FakeGH()
+    out = run_pr(event_for("0" * 40, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 2
+    assert "fetch-depth: 0" in out.summary
+    assert gh.calls == []
+
+
+def test_write_refused_still_succeeds(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
+    gh = FakeGH(fail={"upsert_comment": 403})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert "## Review Compass:" in out.summary
+    assert "HTTP 403" in out.summary
+
+
+def test_comment_failure_still_dismisses_when_not_eligible(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
+    gh = FakeGH(fail={"upsert_comment": 403})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert gh.args("dismiss_own_approvals")
+    assert "HTTP 403" in out.summary
+
+
+def test_comment_failure_never_approves(make_repo: RepoFactory) -> None:
+    files: dict[str, str | bytes | None] = {
+        ".review-compass.yml": "auto_approve: true\n",
+        "README.md": "a\n",
+    }
+    path, base, head = build(make_repo, files, {"README.md": "b\n"})
+    gh = FakeGH(fail={"upsert_comment": 403})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket == "low"
+    assert not gh.args("approve")
+    assert "HTTP 403" in out.summary
+
+
+def test_not_a_pull_request_event(tmp_path: Path) -> None:
+    out = run_pr({"action": "push"}, tmp_path, None, None)
+    assert out.exit_code == 2
+    assert out.summary == "Not a pull_request event"
+
+
+def test_null_body(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    out = run_pr(event_for(base, head, body=None), path, FakeGH(), None)  # type: ignore[arg-type]
+    assert out.exit_code == 0
+    assert meta_from_event(event_for(base, head, body=None)).body == ""
