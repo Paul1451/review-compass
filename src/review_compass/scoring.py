@@ -17,7 +17,8 @@ _SKIM_KINDS = {FileKind.DOC, FileKind.GENERATED, FileKind.LOCKFILE}
 
 
 def _points(weight: int, fraction: float) -> int:
-    return int(weight * fraction + 0.5)
+    # Epsilon absorbs float noise so exact .5 products round half up.
+    return int(weight * fraction + 0.5 + 1e-9)
 
 
 def _dependents_fraction(n: int) -> float:
@@ -28,14 +29,14 @@ def _size_fraction(lines: int) -> float:
     return min(1.0, math.log2(1 + lines / 10) / 5)
 
 
-def _first_hotspot(features: PRFeatures) -> str:
+def _first_hotspot(features: PRFeatures) -> str | None:
     best: FileFeatures | None = None
     for f in features.files:
         if f.kind is not FileKind.SOURCE:
             continue
         if best is None or f.churn_90d > best.churn_90d:
             best = f
-    return best.change.path if best is not None else "?"
+    return best.change.path if best is not None else None
 
 
 def _contributions(features: PRFeatures, w: Weights) -> list[Contribution]:
@@ -68,11 +69,13 @@ def _contributions(features: PRFeatures, w: Weights) -> list[Contribution]:
             f"{features.effective_lines} lines changed",
         )
     )
+    hot_path = _first_hotspot(features)
+    hot_name = f" {hot_path}" if hot_path is not None else ""
     entries.append(
         (
             "hotspot",
             _points(w.hotspot, min(1.0, features.max_churn / 9)),
-            f"hotspot: {_first_hotspot(features)} changed {features.max_churn}x in 90 days",
+            f"hotspot:{hot_name} changed {features.max_churn}x in 90 days",
         )
     )
     pct = int(features.unfamiliar_share * 100 + 0.5)

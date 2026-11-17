@@ -204,3 +204,85 @@ def test_file_ranking_and_skim() -> None:
 def test_is_pure() -> None:
     f = feats(effective_lines=70, max_churn=3)
     assert score(f, P) == score(f, P)
+
+
+@pytest.mark.parametrize(
+    "weight,share,expected", [(11, 15 / 22, 8), (13, 15 / 26, 8), (45, 7 / 10, 32)]
+)
+def test_half_up_is_float_safe(weight: int, share: float, expected: int) -> None:
+    policy = load_policy(f"weights: {{unfamiliar: {weight}}}")
+    assert pts(score(feats(unfamiliar_share=share), policy), "unfamiliar") == expected
+
+
+def _reason(r: RiskResult, signal: str) -> str:
+    return next(c.reason for c in r.contributions if c.signal == signal)
+
+
+def test_sensitive_reason_more_suffix() -> None:
+    files = [file_feat(p, sensitive=True) for p in ("auth/a.py", "auth/b.py", "auth/c.py")]
+    r = score(feats(files=files), P)
+    assert _reason(r, "sensitive_path") == "touches sensitive path: auth/a.py (+2 more)"
+
+
+def test_hotspot_reason_names_top_source_file_first_on_ties() -> None:
+    files = [
+        file_feat("tests/t.py", kind=FileKind.TEST, churn_90d=50),
+        file_feat("src/a.py", churn_90d=4),
+        file_feat("src/b.py", churn_90d=7),
+        file_feat("src/c.py", churn_90d=7),
+    ]
+    r = score(feats(files=files, max_churn=7), P)
+    assert _reason(r, "hotspot") == "hotspot: src/b.py changed 7x in 90 days"
+
+
+def test_hotspot_reason_without_source_file_has_no_placeholder() -> None:
+    files = [file_feat("tests/t.py", kind=FileKind.TEST, churn_90d=5)]
+    r = score(feats(files=files, max_churn=5), P)
+    assert _reason(r, "hotspot") == "hotspot: changed 5x in 90 days"
+
+
+def test_unfamiliar_reason_percentage() -> None:
+    r = score(feats(unfamiliar_share=0.666), P)
+    assert _reason(r, "unfamiliar") == "author has not changed 67% of these files before"
+
+
+@pytest.mark.parametrize("touched", [True, False])
+def test_guard_touched_passthrough(touched: bool) -> None:
+    assert score(feats(guard_touched=touched), P).guard_touched is touched
+
+
+def test_file_reasons_content_and_order() -> None:
+    f = feats(
+        files=[
+            file_feat(
+                "auth/x.py",
+                sensitive=True,
+                dependents=3,
+                churn_90d=4,
+                existed_at_base=True,
+                author_touched_before=False,
+                lines=10,
+            )
+        ]
+    )
+    (rank,) = score(f, P).files
+    assert rank.reasons == [
+        "sensitive path",
+        "3 dependents",
+        "changed 4x in 90 days",
+        "new to author",
+        "10 lines",
+    ]
+    assert rank.score == 25 + 10 + 4 + 8 + 3
+
+
+def test_zero_weight_hotspot_drops_signal_and_file_points() -> None:
+    policy = load_policy("weights: {hotspot: 0}")
+    r = score(feats(files=[file_feat("src/a.py", churn_90d=9)], max_churn=9), policy)
+    assert pts(r, "hotspot") == 0
+    assert r.files[0].score == 0
+    assert "changed 9x in 90 days" not in r.files[0].reasons
+
+
+def test_no_unmeasured_note_when_dependents_zero() -> None:
+    assert score(feats(dependents_total=0, source_changed=True), P).notes == []
