@@ -26,6 +26,14 @@ from review_compass.models import FileKind
         ("src/auth/session.py", FileKind.SOURCE),
         ("web/src/Button.tsx", FileKind.SOURCE),
         ("Makefile", FileKind.SOURCE),
+        (".gitignore", FileKind.CONFIG),
+        ("web/.eslintrc.json", FileKind.CONFIG),
+        (".editorconfig", FileKind.CONFIG),
+        ("logo.png", FileKind.GENERATED),
+        ("docs/Logo.PNG", FileKind.GENERATED),
+        ("assets/font.woff2", FileKind.GENERATED),
+        ("tests/fixtures/img.png", FileKind.GENERATED),
+        ("icon.svg", FileKind.SOURCE),
     ],
 )
 def test_classify(path: str, kind: FileKind) -> None:

@@ -20,6 +20,13 @@ _LOCKFILES = frozenset(
 )
 _GENERATED_DIRS = frozenset({"dist", "build", "vendor", "node_modules"})
 _GENERATED_NAMES = ("*.min.js", "*.min.css", "*_pb2.py", "*.generated.*", "*.snap")
+_BINARY_EXTENSIONS = frozenset(
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".pdf",
+        ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".mp3", ".mp4", ".mov", ".zip", ".gz", ".tar", ".jar", ".bin",
+    }
+)  # fmt: skip
 _TEST_DIRS = frozenset({"tests", "test", "__tests__", "spec"})
 _TEST_NAMES = (
     "test_*.py",
@@ -46,6 +53,26 @@ _CONFIG_NAMES = (
     ".env*",
     "Dockerfile*",
     "requirements*.txt",
+    ".eslintrc*",
+    ".prettierrc.*",
+    ".babelrc*",
+    ".stylelintrc*",
+)
+_CONFIG_BASENAMES = frozenset(
+    {
+        ".gitignore",
+        ".gitattributes",
+        ".gitmodules",
+        ".editorconfig",
+        ".dockerignore",
+        ".npmrc",
+        ".nvmrc",
+        ".prettierrc",
+        ".prettierignore",
+        ".eslintignore",
+        ".python-version",
+        ".tool-versions",
+    }
 )
 
 
@@ -60,7 +87,11 @@ def classify(path: str) -> FileKind:
 
     if name in _LOCKFILES:
         return FileKind.LOCKFILE
-    if dirs & _GENERATED_DIRS or _matches(name, _GENERATED_NAMES):
+    if (
+        dirs & _GENERATED_DIRS
+        or _matches(name, _GENERATED_NAMES)
+        or PurePosixPath(name).suffix.lower() in _BINARY_EXTENSIONS
+    ):
         return FileKind.GENERATED
     if dirs & _TEST_DIRS or _matches(name, _TEST_NAMES):
         return FileKind.TEST
@@ -71,6 +102,6 @@ def classify(path: str) -> FileKind:
         or (fnmatchcase(name, "*.txt") and not fnmatchcase(name, "requirements*.txt"))
     ):
         return FileKind.DOC
-    if _matches(name, _CONFIG_NAMES):
+    if name in _CONFIG_BASENAMES or _matches(name, _CONFIG_NAMES):
         return FileKind.CONFIG
     return FileKind.SOURCE

@@ -14,13 +14,15 @@ from pathlib import Path
 
 from review_compass.gitrepo import GitRepo
 
-SUPPORTED_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+SUPPORTED_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
+_TS_TWINS = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
 _JS_EXTENSIONS = tuple(e for e in SUPPORTED_EXTENSIONS if e != ".py")
 _MAX_JS_BYTES = 1024 * 1024
 
 _JS_PATTERNS = (
     re.compile(r"""\bfrom\s*['"]([^'"\n]+)['"]"""),  # import … from / export … from
     re.compile(r"""\bimport\s*['"]([^'"\n]+)['"]"""),  # side-effect import
+    re.compile(r"""\bimport\s*\(\s*['"]([^'"\n]+)['"]"""),  # dynamic import('./x')
     re.compile(r"""\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)"""),
 )
 
@@ -31,7 +33,8 @@ def _is_python(path: str) -> bool:
 
 def _cache_key(path: str, sha: str) -> str:
     # The same blob can sit under a .py and a .js name; the parsers differ.
-    return f"{'py' if _is_python(path) else 'js'}:{sha}"
+    # "js2" replaced "js" when dynamic imports were added; old entries are stale.
+    return f"{'py' if _is_python(path) else 'js2'}:{sha}"
 
 
 def _python_specifiers(text: str) -> list[str]:
@@ -177,7 +180,12 @@ class ImportIndex:
 
     @staticmethod
     def _resolve_js(base: str, tree: dict[str, str]) -> str | None:
-        candidates = [base]
+        if base in tree:
+            return base
+        stem, ext = posixpath.splitext(base)
+        twins = [stem + t for t in _TS_TWINS.get(ext, ())]
+        candidates = [t for t in twins if t in tree]
+        candidates += [base]
         candidates += [base + ext for ext in _JS_EXTENSIONS]
         candidates += [f"{base}/index{ext}" for ext in _JS_EXTENSIONS]
         return next((c for c in candidates if c in tree), None)

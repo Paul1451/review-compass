@@ -137,10 +137,15 @@ def _rank_file(f: FileFeatures, w: Weights) -> FileRank:
 
 
 def _rank_files(features: PRFeatures, w: Weights) -> list[FileRank]:
-    ranks = [_rank_file(f, w) for f in features.files]
-    active = sorted((r for r in ranks if not r.skim), key=lambda r: (-r.score, r.path))
-    skimmed = sorted((r for r in ranks if r.skim), key=lambda r: r.path)
-    return active + skimmed
+    ranked = [(f.kind, _rank_file(f, w)) for f in features.files]
+
+    def by_score(r: FileRank) -> tuple[int, str]:
+        return (-r.score, r.path)
+
+    code = sorted((r for k, r in ranked if not r.skim and k is not FileKind.TEST), key=by_score)
+    tests = sorted((r for k, r in ranked if not r.skim and k is FileKind.TEST), key=by_score)
+    skimmed = sorted((r for _, r in ranked if r.skim), key=lambda r: r.path)
+    return code + tests + skimmed
 
 
 def _bucket(total: int, policy: Policy) -> Bucket:

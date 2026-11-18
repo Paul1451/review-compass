@@ -201,6 +201,22 @@ def test_file_ranking_and_skim() -> None:
     assert files[0].span == (88, 140)
 
 
+def test_reading_order_puts_tests_after_code() -> None:
+    f = feats(
+        files=[
+            file_feat("tests/test_big.py", kind=FileKind.TEST, lines=300),
+            file_feat("src/small.py", lines=10),
+            file_feat("README.md", kind=FileKind.DOC),
+        ],
+        source_changed=True,
+    )
+    assert [x.path for x in score(f, P).files] == [
+        "src/small.py",
+        "tests/test_big.py",
+        "README.md",
+    ]
+
+
 def test_is_pure() -> None:
     f = feats(effective_lines=70, max_churn=3)
     assert score(f, P) == score(f, P)
@@ -239,6 +255,15 @@ def test_hotspot_reason_without_source_file_has_no_placeholder() -> None:
     files = [file_feat("tests/t.py", kind=FileKind.TEST, churn_90d=5)]
     r = score(feats(files=files, max_churn=5), P)
     assert _reason(r, "hotspot") == "hotspot: changed 5x in 90 days"
+
+
+def test_hotspot_reason_never_names_a_config_file() -> None:
+    files = [
+        file_feat(".gitignore", kind=FileKind.CONFIG, churn_90d=9),
+        file_feat("src/a.py", churn_90d=2),
+    ]
+    r = score(feats(files=files, max_churn=2), P)
+    assert _reason(r, "hotspot") == "hotspot: src/a.py changed 2x in 90 days"
 
 
 def test_unfamiliar_reason_percentage() -> None:

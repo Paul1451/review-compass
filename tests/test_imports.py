@@ -132,3 +132,55 @@ def test_missing_blob_is_not_cached(make_repo, monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(b.repo, "read_blobs", real_read_blobs)
     assert idx.dependents(rev, ["a.py"]) == {"a.py": {"b.py"}}
+
+
+def test_dynamic_import_is_an_import(make_repo) -> None:
+    b = make_repo()
+    rev = b.commit(
+        {
+            "web/app.tsx": "const m = await import('./lazy')\n",
+            "web/lazy.ts": "export const l = 1\n",
+        }
+    )
+    deps = ImportIndex(b.repo).dependents(rev, ["web/lazy.ts"])
+    assert deps == {"web/lazy.ts": {"web/app.tsx"}}
+
+
+def test_ts_esm_js_extension_resolves_to_ts(make_repo) -> None:
+    b = make_repo()
+    rev = b.commit(
+        {
+            "web/a.ts": "import { u } from './util.js'\n",
+            "web/util.ts": "export const u = 1\n",
+        }
+    )
+    deps = ImportIndex(b.repo).dependents(rev, ["web/util.ts"])
+    assert deps == {"web/util.ts": {"web/a.ts"}}
+
+
+def test_ts_esm_literal_js_file_wins_over_ts(make_repo) -> None:
+    b = make_repo()
+    rev = b.commit(
+        {
+            "web/a.ts": "import { u } from './util.js'\n",
+            "web/util.js": "export const u = 1\n",
+            "web/util.ts": "export const u = 1\n",
+        }
+    )
+    deps = ImportIndex(b.repo).dependents(rev, ["web/util.js", "web/util.ts"])
+    assert deps == {"web/util.js": {"web/a.ts"}, "web/util.ts": set()}
+
+
+def test_old_format_js_cache_entry_is_ignored(make_repo, tmp_path) -> None:
+    b = make_repo()
+    rev = b.commit(
+        {
+            "web/app.tsx": "const m = await import('./lazy')\n",
+            "web/lazy.ts": "export const l = 1\n",
+        }
+    )
+    sha = b.repo.ls_tree(rev)["web/app.tsx"]
+    cache = tmp_path / "blobs.json"
+    cache.write_text(json.dumps({f"js:{sha}": []}), encoding="utf-8")
+    deps = ImportIndex(b.repo, cache).dependents(rev, ["web/lazy.ts"])
+    assert deps == {"web/lazy.ts": {"web/app.tsx"}}
