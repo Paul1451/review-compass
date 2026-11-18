@@ -23,15 +23,6 @@ _NO_MERGE_BASE = (
 )
 
 
-PATH_CHUNK = 200
-"""Paths per git invocation: keeps the argument list far below the OS limit."""
-
-
-def _chunks(paths: Sequence[str]) -> Iterable[Sequence[str]]:
-    for start in range(0, len(paths), PATH_CHUNK):
-        yield paths[start : start + PATH_CHUNK]
-
-
 class GitError(RuntimeError):
     pass
 
@@ -151,9 +142,9 @@ class GitRepo:
             self._run("rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
         except GitError as error:  # --quiet leaves stderr empty
             raise GitError(f"git rev-parse failed: bad revision {rev}") from error
-        if not self._run("ls-tree", "-z", "--end-of-options", rev, "--", path):
+        if not self._run("ls-tree", "-z", "--end-of-options", rev, path):
             return None
-        return self._text("show", "--end-of-options", f"{rev}:{path}")
+        return self._text("show", "--end-of-options", f"{rev}:{path}", "--")
 
     def ls_tree(self, rev: str) -> dict[str, str]:
         tree: dict[str, str] = {}
@@ -202,21 +193,14 @@ class GitRepo:
         if not paths:
             return counts
         since = int(self.commit_time(rev).timestamp()) - days * 86400
-        for batch in _chunks(paths):
-            out = self._text(
-                "log",
-                "--format=%x01",
-                "--name-only",
-                f"--since=@{since}",
-                "--end-of-options",
-                rev,
-                "--",
-                *batch,
-            )
-            for chunk in out.split("\x01"):
-                for p in {line for line in chunk.splitlines() if line}:
-                    if p in counts:
-                        counts[p] += 1
+        out = self._text(
+            "log", "--format=%x01", "--name-only", f"--since=@{since}",
+            "--end-of-options", rev, "--", *paths,
+        )  # fmt: skip
+        for chunk in out.split("\x01"):
+            for p in {line for line in chunk.splitlines() if line}:
+                if p in counts:
+                    counts[p] += 1
         return counts
 
     def touched_before(self, rev: str, emails: set[str], paths: Sequence[str]) -> dict[str, bool]:
@@ -224,17 +208,16 @@ class GitRepo:
         if not paths:
             return touched
         wanted = {e.lower() for e in emails}
-        for batch in _chunks(paths):
-            out = self._text(
-                "log", "--format=%x01%ae", "--name-only", "--end-of-options", rev, "--", *batch
-            )
-            for chunk in out.split("\x01"):
-                lines = [line for line in chunk.splitlines() if line]
-                if not lines or lines[0].lower() not in wanted:
-                    continue
-                for p in lines[1:]:
-                    if p in touched:
-                        touched[p] = True
+        out = self._text(
+            "log", "--format=%x01%ae", "--name-only", "--end-of-options", rev, "--", *paths
+        )
+        for chunk in out.split("\x01"):
+            lines = [line for line in chunk.splitlines() if line]
+            if not lines or lines[0].lower() not in wanted:
+                continue
+            for p in lines[1:]:
+                if p in touched:
+                    touched[p] = True
         return touched
 
     def diff_text(self, base: str, head: str, paths: Sequence[str]) -> str:

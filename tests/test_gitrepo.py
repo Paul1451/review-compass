@@ -141,7 +141,8 @@ def test_file_named_like_merge_base_sha_does_not_break_git_calls(make_repo) -> N
     assert repo.author_emails(base, head) == {"dev@example.com"}
     assert repo.diff_text(base, head, ["src/app.py"]).startswith("diff --git")
     assert repo.show(base, "README.md") == "a\n"
-    assert repo.ls_tree(base) == repo.ls_tree(base)
+    assert list(repo.ls_tree(base)) == ["README.md"]
+    assert sorted(repo.ls_tree(head)) == sorted([base, "README.md", "src/app.py"])
     assert repo.churn(head, ["src/app.py"]) == {"src/app.py": 1}
     assert repo.touched_before(head, {"dev@example.com"}, ["src/app.py"]) == {"src/app.py": True}
     since = datetime(2000, 1, 1, tzinfo=UTC)
@@ -179,20 +180,17 @@ def test_churn_and_touched_before_with_many_paths(make_repo) -> None:
 
 
 
-def test_path_batching_gives_identical_results(make_repo, monkeypatch) -> None:
-    from review_compass import gitrepo
 
+def test_show_with_file_named_like_rev_colon_path(make_repo) -> None:
     b = make_repo()
-    files: dict[str, str | bytes | None] = {f"d/f{i}.py": "x\n" for i in range(12)}
-    b.commit(files, author="Ann <ann@example.com>")
-    rev = b.commit({"d/f0.py": "y\n", "d/f11.py": "y\n"}, author="Bob <bob@example.com>")
-    paths = list(files)
-    whole = (
-        b.repo.churn(rev, paths),
-        b.repo.touched_before(rev, {"bob@example.com"}, paths),
-    )
-    monkeypatch.setattr(gitrepo, "PATH_CHUNK", 5)
-    assert (
-        b.repo.churn(rev, paths),
-        b.repo.touched_before(rev, {"bob@example.com"}, paths),
-    ) == whole
+    base = b.commit({".review-compass.yml": "auto_approve: true\n"})
+    b.commit({f"{base}:.review-compass.yml": "decoy\n"})
+    assert b.repo.show(base, ".review-compass.yml") == "auto_approve: true\n"
+    assert b.repo.show(base, "nope.yml") is None
+
+
+def test_show_with_root_entry_named_double_dash(make_repo) -> None:
+    b = make_repo()
+    sha = b.commit({"--": "decoy\n", "a.py": "1\n"})
+    assert b.repo.show(sha, "nope.yml") is None
+    assert b.repo.show(sha, "a.py") == "1\n"
