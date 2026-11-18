@@ -249,3 +249,9 @@ class GitRepo:
         branch = self._text("symbolic-ref", "--short", "HEAD").strip()
         spec = f"+refs/heads/{branch}:refs/heads/{branch}"
         self._run("fetch", "--prune", "origin", "--", spec)
+
+    def origin_url(self) -> str | None:
+        try:
+            return self._text("config", "--get", "remote.origin.url").strip() or None
+        except GitError:
+            return None

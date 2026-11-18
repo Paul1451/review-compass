@@ -9,7 +9,9 @@ deliberately no expiry logic.
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Sequence
 from datetime import datetime
@@ -102,15 +104,33 @@ def _parse_node(raw: dict[str, Any]) -> HistoricPR:
     )
 
 
-def _read_cached(path: Path, cursor: str | None) -> dict[str, Any] | None:
+_SHAPE_ERRORS = (KeyError, TypeError, ValueError, AttributeError)
+
+
+def _parse_page(conn: Any) -> tuple[list[HistoricPR], bool, str | None]:
+    """Validate and parse one pullRequests connection; raises on any shape problem."""
+    nodes = conn["nodes"]
+    info = conn["pageInfo"]
+    has_next, end_cursor = info["hasNextPage"], info["endCursor"]
+    if not isinstance(nodes, list) or not isinstance(has_next, bool):
+        raise TypeError("bad page")
+    if end_cursor is not None and not isinstance(end_cursor, str):
+        raise TypeError("bad cursor")
+    if has_next and end_cursor is None:
+        raise ValueError("missing cursor")
+    return [_parse_node(n) for n in nodes if n is not None], has_next, end_cursor
+
+
+def _read_cached(
+    path: Path, repo: str, cursor: str | None
+) -> tuple[list[HistoricPR], bool, str | None] | None:
     try:
         stored = json.loads(path.read_text())
-    except (OSError, ValueError):
+        if stored.get("repo") != repo or stored.get("cursor") != cursor:
+            return None
+        return _parse_page(stored["data"])
+    except (OSError, *_SHAPE_ERRORS):
         return None
-    if not isinstance(stored, dict) or stored.get("cursor") != cursor:
-        return None
-    data = stored.get("data")
-    return data if isinstance(data, dict) else None
 
 
 def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -136,46 +156,66 @@ def fetch_merged_prs(
     index = 0
     while len(prs) < limit:
         path = cache_dir / "prs" / f"page-{index}.json"
-        conn = _read_cached(path, cursor)
-        if conn is None:
+        parsed = _read_cached(path, repo, cursor)
+        if parsed is None:
             data = gh.graphql(QUERY, {"owner": owner, "name": name, "cursor": cursor})
             try:
                 conn = data["repository"]["pullRequests"]
-            except (KeyError, TypeError) as exc:
-                raise GitHubError("unexpected GraphQL response shape", 0) from exc
-            _write_atomic(path, {"cursor": cursor, "data": conn})
-        prs.extend(_parse_node(n) for n in conn["nodes"])
-        info = conn["pageInfo"]
-        if not info["hasNextPage"]:
+                parsed = _parse_page(conn)
+            except _SHAPE_ERRORS as exc:
+                raise GitHubError("unexpected pull request page shape", 200) from exc
+            _write_atomic(path, {"repo": repo, "cursor": cursor, "data": conn})
+        page_prs, has_next, end_cursor = parsed
+        prs.extend(page_prs)
+        if not has_next:
             break
-        cursor = info["endCursor"]
+        cursor = end_cursor
         index += 1
-    return prs[:limit]
+    unique = list({pr.number: pr for pr in reversed(prs)}.values())
+    unique.reverse()
+    dropped = len(prs) - len(unique)
+    if dropped:
+        print(
+            f"review-compass: dropped {dropped} duplicate pull request(s) while paging {repo}",
+            file=sys.stderr,
+        )
+    return unique[:limit]
 
 
 def ensure_clone(repo: str, cache_dir: Path, *, url: str | None = None) -> GitRepo:
     """Bare clone at ``cache_dir/repo.git``; reused (and updated) when already present."""
     _check_repo(repo)
+    source = url if url is not None else f"https://github.com/{repo}.git"
     target = cache_dir / "repo.git"
     if (target / "HEAD").is_file() and (target / "objects").is_dir():
         git = GitRepo(target)
+        existing = git.origin_url()
+        if existing != source:
+            raise GitError(f"cached clone {target} has origin {existing!r}, expected {source!r}")
         git.fetch_default_branch()
         return git
-    source = url if url is not None else f"https://github.com/{repo}.git"
     cache_dir.mkdir(parents=True, exist_ok=True)
+    partial = cache_dir / "repo.git.partial"
+    shutil.rmtree(partial, ignore_errors=True)
     proc = subprocess.run(
-        ["git", "clone", "--bare", "--quiet", "--", source, str(target)],
+        ["git", "clone", "--bare", "--quiet", "--", source, str(partial)],
         capture_output=True,
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
     )
     if proc.returncode != 0:
         msg = proc.stderr.decode(errors="replace").strip()
         raise GitError(f"git clone failed: {msg}")
+    shutil.rmtree(target, ignore_errors=True)
+    os.replace(partial, target)
     return GitRepo(target)
 
 
 def fetch_pr_heads(git: GitRepo, numbers: Sequence[int], batch: int = 100) -> set[int]:
-    """Fetch ``refs/pull/<n>/head`` for each number; return the numbers that stay missing."""
+    """Fetch ``refs/pull/<n>/head`` for each number; return the numbers still without a head.
+
+    A number is reported as "without head" for any fetch failure, including transient network
+    errors, not only for refs that do not exist on the remote.
+    """
     wanted = [n for n in dict.fromkeys(numbers) if not git.ref_exists(f"refs/pull/{n}/head")]
     missing: set[int] = set()
     for start in range(0, len(wanted), batch):
