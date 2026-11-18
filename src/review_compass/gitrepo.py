@@ -4,6 +4,7 @@ PR code is only ever read through git, never executed. Every call uses an
 argument list (no shell) and ``--`` before path arguments.
 """
 
+import os
 import re
 import subprocess
 from collections.abc import Iterable, Sequence
@@ -22,6 +23,15 @@ _NO_MERGE_BASE = (
 )
 
 
+PATH_CHUNK = 200
+"""Paths per git invocation: keeps the argument list far below the OS limit."""
+
+
+def _chunks(paths: Sequence[str]) -> Iterable[Sequence[str]]:
+    for start in range(0, len(paths), PATH_CHUNK):
+        yield paths[start : start + PATH_CHUNK]
+
+
 class GitError(RuntimeError):
     pass
 
@@ -36,6 +46,7 @@ class GitRepo:
             cwd=self.path,
             capture_output=True,
             input=input_,
+            env={**os.environ, "LC_ALL": "C"},  # stable messages for error classification
         )
         if proc.returncode != 0:
             msg = proc.stderr.decode(errors="replace").strip()
@@ -47,7 +58,7 @@ class GitRepo:
 
     def merge_base(self, a: str, b: str) -> str:
         try:
-            out = self._text("merge-base", a, b).strip()
+            out = self._text("merge-base", "--end-of-options", a, b).strip()
         except GitError:
             out = ""
         if not out:
@@ -55,7 +66,9 @@ class GitRepo:
         return out
 
     def changed_files(self, base: str, head: str) -> list[FileChange]:
-        status_parts = self._text("diff", "-M", "--name-status", "-z", base, head).split("\0")
+        status_parts = self._text(
+            "diff", "-M", "--name-status", "-z", "--end-of-options", base, head, "--"
+        ).split("\0")
         statuses: dict[str, tuple[Status, str | None]] = {}
         i = 0
         while i + 1 < len(status_parts):
@@ -69,7 +82,9 @@ class GitRepo:
                 i += 2
 
         counts: dict[str, tuple[int, int, bool]] = {}
-        num_parts = self._text("diff", "-M", "--numstat", "-z", base, head).split("\0")
+        num_parts = self._text(
+            "diff", "-M", "--numstat", "-z", "--end-of-options", base, head, "--"
+        ).split("\0")
         i = 0
         while i < len(num_parts) and num_parts[i]:
             add_s, del_s, path = num_parts[i].split("\t", 2)
@@ -102,7 +117,16 @@ class GitRepo:
         current: list[tuple[int, int]] | None = None
         in_header = False
         diff = self._text(
-            "diff", "-M", "-U0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", base, head
+            "diff",
+            "-M",
+            "-U0",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--end-of-options",
+            base,
+            head,
+            "--",
         )
         for line in diff.splitlines():
             if line.startswith("diff --git "):
@@ -123,14 +147,17 @@ class GitRepo:
 
     def show(self, rev: str, path: str) -> str | None:
         """File content at rev; None only if rev is a commit lacking the path."""
-        self._run("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
-        if not self._run("ls-tree", "-z", rev, "--", path):
+        try:
+            self._run("rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
+        except GitError as error:  # --quiet leaves stderr empty
+            raise GitError(f"git rev-parse failed: bad revision {rev}") from error
+        if not self._run("ls-tree", "-z", "--end-of-options", rev, "--", path):
             return None
-        return self._text("show", f"{rev}:{path}")
+        return self._text("show", "--end-of-options", f"{rev}:{path}")
 
     def ls_tree(self, rev: str) -> dict[str, str]:
         tree: dict[str, str] = {}
-        for entry in self._text("ls-tree", "-r", "-z", rev).split("\0"):
+        for entry in self._text("ls-tree", "-r", "-z", "--end-of-options", rev).split("\0"):
             if not entry:
                 continue
             meta, path = entry.split("\t", 1)
@@ -159,15 +186,15 @@ class GitRepo:
         return blobs
 
     def commit_time(self, rev: str) -> datetime:
-        stamp = int(self._text("show", "-s", "--format=%ct", rev).strip())
+        stamp = int(self._text("show", "-s", "--format=%ct", "--end-of-options", rev, "--").strip())
         return datetime.fromtimestamp(stamp, tz=UTC)
 
     def commit_messages(self, base: str, head: str) -> list[str]:
-        out = self._text("log", "--format=%B%x00", f"{base}..{head}")
+        out = self._text("log", "--format=%B%x00", "--end-of-options", f"{base}..{head}", "--")
         return [m.strip() for m in out.split("\0") if m.strip()]
 
     def author_emails(self, base: str, head: str) -> set[str]:
-        out = self._text("log", "--format=%ae", f"{base}..{head}")
+        out = self._text("log", "--format=%ae", "--end-of-options", f"{base}..{head}", "--")
         return {line for line in out.splitlines() if line}
 
     def churn(self, rev: str, paths: Sequence[str], days: int = 90) -> dict[str, int]:
@@ -175,13 +202,21 @@ class GitRepo:
         if not paths:
             return counts
         since = int(self.commit_time(rev).timestamp()) - days * 86400
-        out = self._text(
-            "log", "--format=%x01", "--name-only", f"--since=@{since}", rev, "--", *paths
-        )
-        for chunk in out.split("\x01"):
-            for p in {line for line in chunk.splitlines() if line}:
-                if p in counts:
-                    counts[p] += 1
+        for batch in _chunks(paths):
+            out = self._text(
+                "log",
+                "--format=%x01",
+                "--name-only",
+                f"--since=@{since}",
+                "--end-of-options",
+                rev,
+                "--",
+                *batch,
+            )
+            for chunk in out.split("\x01"):
+                for p in {line for line in chunk.splitlines() if line}:
+                    if p in counts:
+                        counts[p] += 1
         return counts
 
     def touched_before(self, rev: str, emails: set[str], paths: Sequence[str]) -> dict[str, bool]:
@@ -189,20 +224,25 @@ class GitRepo:
         if not paths:
             return touched
         wanted = {e.lower() for e in emails}
-        out = self._text("log", "--format=%x01%ae", "--name-only", rev, "--", *paths)
-        for chunk in out.split("\x01"):
-            lines = [line for line in chunk.splitlines() if line]
-            if not lines or lines[0].lower() not in wanted:
-                continue
-            for p in lines[1:]:
-                if p in touched:
-                    touched[p] = True
+        for batch in _chunks(paths):
+            out = self._text(
+                "log", "--format=%x01%ae", "--name-only", "--end-of-options", rev, "--", *batch
+            )
+            for chunk in out.split("\x01"):
+                lines = [line for line in chunk.splitlines() if line]
+                if not lines or lines[0].lower() not in wanted:
+                    continue
+                for p in lines[1:]:
+                    if p in touched:
+                        touched[p] = True
         return touched
 
     def diff_text(self, base: str, head: str, paths: Sequence[str]) -> str:
         if not paths:
             return ""
-        return self._text("diff", "-M", "--no-color", base, head, "--", *paths)
+        return self._text(
+            "diff", "-M", "--no-color", "--end-of-options", base, head, "--", *paths
+        )
 
     def log_between(self, rev: str, since: datetime, until: datetime) -> list[tuple[str, str]]:
         return [(sha, msg) for sha, _, msg in self.log_between_timed(rev, since, until)]
@@ -216,7 +256,9 @@ class GitRepo:
             "--format=%H%x01%ct%x01%B%x00",
             f"--since=@{int(since.timestamp())}",
             f"--until=@{int(until.timestamp())}",
+            "--end-of-options",
             rev,
+            "--",
         )
         commits: list[tuple[str, datetime, str]] = []
         for record in out.split("\0"):
@@ -246,7 +288,7 @@ class GitRepo:
 
     def ref_exists(self, ref: str) -> bool:
         try:
-            self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+            self._run("rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}")
         except GitError:
             return False
         return True

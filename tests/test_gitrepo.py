@@ -125,3 +125,74 @@ def test_log_between_timed_returns_commit_times(make_repo) -> None:
         (mid, datetime(2024, 1, 5, 12, tzinfo=UTC), "mid\n\nbody")
     ]
     assert b.repo.log_between("HEAD", since, until) == [(mid, "mid\n\nbody")]
+
+
+def test_file_named_like_merge_base_sha_does_not_break_git_calls(make_repo) -> None:
+    b = make_repo()
+    base = b.commit({"README.md": "a\n"})
+    b.branch("feature")
+    head = b.commit({f"{base}": "decoy\n", "src/app.py": "x = 1\n"})
+    repo = b.repo
+    assert repo.merge_base(base, head) == base
+    paths = {c.path for c in repo.changed_files(base, head)}
+    assert paths == {base, "src/app.py"}
+    assert repo.commit_time(base).year >= 2026
+    assert repo.commit_messages(base, head) == ["c"]
+    assert repo.author_emails(base, head) == {"dev@example.com"}
+    assert repo.diff_text(base, head, ["src/app.py"]).startswith("diff --git")
+    assert repo.show(base, "README.md") == "a\n"
+    assert repo.ls_tree(base) == repo.ls_tree(base)
+    assert repo.churn(head, ["src/app.py"]) == {"src/app.py": 1}
+    assert repo.touched_before(head, {"dev@example.com"}, ["src/app.py"]) == {"src/app.py": True}
+    since = datetime(2000, 1, 1, tzinfo=UTC)
+    until = datetime(2100, 1, 1, tzinfo=UTC)
+    assert len(repo.log_between(base, since, until)) == 1
+    assert repo.ref_exists(base)
+
+
+def test_directory_named_like_base_branch_does_not_break_git_calls(make_repo) -> None:
+    b = make_repo()
+    base = b.commit({"main/readme.txt": "a\n"})
+    b.branch("feature")
+    head = b.commit({"src/app.py": "x = 1\n"})
+    repo = b.repo
+    assert repo.merge_base("main", "HEAD") == base
+    assert [c.path for c in repo.changed_files("main", "HEAD")] == ["src/app.py"]
+    assert repo.commit_time("main").year >= 2026
+    assert repo.commit_messages("main", "HEAD") == ["c"]
+    assert repo.author_emails("main", "HEAD") == {"dev@example.com"}
+    assert repo.diff_text("main", "HEAD", ["src/app.py"]).startswith("diff --git")
+    assert head
+
+
+def test_churn_and_touched_before_with_many_paths(make_repo) -> None:
+    b = make_repo()
+    files: dict[str, str | bytes | None] = {f"d/f{i}.py": "x\n" for i in range(700)}
+    b.commit(files, author="Ann <ann@example.com>")
+    rev = b.commit({"d/f0.py": "y\n", "d/f699.py": "y\n"}, author="Bob <bob@example.com>")
+    paths = list(files)
+    churn = b.repo.churn(rev, paths)
+    assert len(churn) == 700
+    assert churn["d/f0.py"] == 2 and churn["d/f699.py"] == 2 and churn["d/f5.py"] == 1
+    touched = b.repo.touched_before(rev, {"bob@example.com"}, paths)
+    assert touched["d/f0.py"] and touched["d/f699.py"] and not touched["d/f5.py"]
+
+
+
+def test_path_batching_gives_identical_results(make_repo, monkeypatch) -> None:
+    from review_compass import gitrepo
+
+    b = make_repo()
+    files: dict[str, str | bytes | None] = {f"d/f{i}.py": "x\n" for i in range(12)}
+    b.commit(files, author="Ann <ann@example.com>")
+    rev = b.commit({"d/f0.py": "y\n", "d/f11.py": "y\n"}, author="Bob <bob@example.com>")
+    paths = list(files)
+    whole = (
+        b.repo.churn(rev, paths),
+        b.repo.touched_before(rev, {"bob@example.com"}, paths),
+    )
+    monkeypatch.setattr(gitrepo, "PATH_CHUNK", 5)
+    assert (
+        b.repo.churn(rev, paths),
+        b.repo.touched_before(rev, {"bob@example.com"}, paths),
+    ) == whole
