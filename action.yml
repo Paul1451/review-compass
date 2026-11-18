@@ -19,10 +19,14 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: astral-sh/setup-uv@v10
+    # setup-uv is pinned by commit SHA (v10.3.3); the package itself is installed from uv.lock.
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+    - name: Install Review Compass from uv.lock
+      shell: bash
+      run: uv sync --locked --no-dev --project "$GITHUB_ACTION_PATH"
     - name: Run Review Compass
       shell: bash
-      run: uvx --from "${{ github.action_path }}" review-compass pr
+      run: '"$GITHUB_ACTION_PATH/.venv/bin/review-compass" pr'
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
