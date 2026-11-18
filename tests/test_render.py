@@ -28,7 +28,9 @@ def _high() -> RiskResult:
                 signal="sensitive", points=25, reason="touches sensitive path: auth/session.py"
             ),
             Contribution(signal="no_tests", points=18, reason="source changed, no test changes"),
-            Contribution(signal="dependents", points=15, reason="12 files depend on changed modules"),
+            Contribution(
+                signal="dependents", points=15, reason="12 files depend on changed modules"
+            ),
             Contribution(
                 signal="hotspot", points=9, reason="hotspot: auth/session.py changed 9x in 90 days"
             ),
