@@ -1,4 +1,5 @@
 import subprocess
+from datetime import UTC, datetime
 
 import pytest
 
@@ -111,3 +112,16 @@ def test_fetch_default_branch_picks_up_new_commits(make_repo, tmp_path) -> None:
     new = origin.commit({"a.py": "2\n"})
     GitRepo(clone).fetch_default_branch()
     assert GitRepo(clone).ref_exists(new)
+
+
+def test_log_between_timed_returns_commit_times(make_repo) -> None:
+    b = make_repo()
+    b.commit({"a": "1"}, message="old", date="2024-01-01T10:00:00+00:00")
+    mid = b.commit({"a": "2"}, message="mid\n\nbody", date="2024-01-05T12:00:00+00:00")
+    b.commit({"a": "3"}, message="new", date="2024-02-01T10:00:00+00:00")
+    since = datetime(2024, 1, 2, tzinfo=UTC)
+    until = datetime(2024, 1, 10, tzinfo=UTC)
+    assert b.repo.log_between_timed("HEAD", since, until) == [
+        (mid, datetime(2024, 1, 5, 12, tzinfo=UTC), "mid\n\nbody")
+    ]
+    assert b.repo.log_between("HEAD", since, until) == [(mid, "mid\n\nbody")]

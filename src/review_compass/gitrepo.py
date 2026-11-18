@@ -205,20 +205,27 @@ class GitRepo:
         return self._text("diff", "-M", "--no-color", base, head, "--", *paths)
 
     def log_between(self, rev: str, since: datetime, until: datetime) -> list[tuple[str, str]]:
+        return [(sha, msg) for sha, _, msg in self.log_between_timed(rev, since, until)]
+
+    def log_between_timed(
+        self, rev: str, since: datetime, until: datetime
+    ) -> list[tuple[str, datetime, str]]:
+        """Commits reachable from ``rev`` with committer date in range: (sha, time, message)."""
         out = self._text(
             "log",
-            "--format=%H%x01%B%x00",
+            "--format=%H%x01%ct%x01%B%x00",
             f"--since=@{int(since.timestamp())}",
             f"--until=@{int(until.timestamp())}",
             rev,
         )
-        commits: list[tuple[str, str]] = []
+        commits: list[tuple[str, datetime, str]] = []
         for record in out.split("\0"):
             record = record.lstrip("\n")
             if not record:
                 continue
-            sha, _, message = record.partition("\x01")
-            commits.append((sha, message.strip()))
+            sha, _, rest = record.partition("\x01")
+            stamp, _, message = rest.partition("\x01")
+            commits.append((sha, datetime.fromtimestamp(int(stamp), tz=UTC), message.strip()))
         return commits
 
     def fetch_refs(self, refspecs: Sequence[str]) -> set[str]:
