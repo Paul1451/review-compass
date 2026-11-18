@@ -52,7 +52,7 @@ with `Revert` or body contains `This reverts commit`):
 |---|---:|---:|---:|---:|
 | pydantic/pydantic | 30 | 12 | 12 | 6 (4 firm, 2 weak) |
 | home-assistant/core | 7 | 1 | 5 | 1 |
-| vercel/next.js | 35 | 27 | 6 | 2 |
+| vercel/next.js | 35 | 27 | 6 | 2 (3 target PRs) |
 
 "Excluded by the stated rules" covers reverts later than 14 days after the
 merge, reverts whose target is not an evaluated PR, and commits titled
@@ -63,9 +63,10 @@ Missed PRs (should have been labelled `reverted`):
 - pydantic/pydantic, firm: #8583, #9746, #10886, #13582. Weak: #7360 (partial),
   #7636 (target not verified).
 - home-assistant/core: #189191 (partial revert).
-- vercel/next.js: #100651, #99689, #100597 (two revert commits, one with two
-  targets), and #100126, which was reverted by a commit that is not titled
-  `Revert`.
+- vercel/next.js: #100651, #99689, #100597 (the 2 missed revert commits in the
+  table, one of them with two targets), and a fourth PR, #100126, which was
+  reverted by a commit that is not titled `Revert` and is therefore not among
+  the 35 revert commits counted above. All 4 are firm.
 
 Why they were missed: squash-merged revert PRs carry no `This reverts commit <sha>`
 line, so detection depends on `Reverts #N` in the body or an exact title match.
