@@ -169,7 +169,10 @@ Notes:
 - Pull requests from forks get no comment and no label, because their token
   cannot write. The brief goes to the job log and the step summary only.
 - Draft pull requests are skipped unless `skip_drafts: false` is set in the
-  policy file.
+  policy file: no comment, no label, no approval. The only write is that an
+  earlier approval by the action is withdrawn.
+- git 2.30 or newer is required (the tool passes `--end-of-options` to
+  `git rev-parse`). GitHub-hosted runners have it.
 - Pull requests created with the default `GITHUB_TOKEN` do not trigger
   `pull_request` workflows at all, so agents that open pull requests that way
   get no comment.
@@ -198,7 +201,7 @@ weights:              # points per signal at full strength (integers >= 0)
   unfamiliar: 8
   spread: 5
   agent: 5
-skip_drafts: true     # do nothing for draft pull requests
+skip_drafts: true     # drafts: no comment, label or approval; an own earlier approval is withdrawn
 auto_approve: false   # see Auto-approval
 llm:
   enabled: true       # false: never call the model, even with a key
@@ -233,7 +236,8 @@ uvx --from git+https://github.com/Paul1451/review-compass \
 ```
 
 Add `--json` for the machine-readable result and `--repo-dir PATH` to point at
-another checkout. The policy is read from the `--base` revision. Use
+another checkout. git 2.30 or newer is required. The policy is read from the
+`--base` revision. Use
 `--no-llm` to be sure nothing leaves your machine: without it, if
 `ANTHROPIC_API_KEY` is set in your shell, the reading-list notes are generated
 by the model and the diff of the top-ranked files is sent to the Anthropic API.
@@ -250,11 +254,11 @@ lockfiles" (see [Limits](#limits)).
 
 | Signal | Weight | Fraction (0 to 1) | Reason shown |
 |---|---:|---|---|
-| `sensitive_path` | 25 | 1 if any changed file matches a sensitive path | touches sensitive path: <path> (+N more) |
+| `sensitive_path` | 25 | 1 if any changed file matches a sensitive path | `touches sensitive path: PATH (+N more)` |
 | `no_tests` | 18 | 1 if source changed and no test file changed | source changed, no test changes |
 | `dependents` | 15 | floor(log2(1 + n)) / 3, n = files that import the changed modules | n files depend on changed modules |
 | `size` | 15 | log2(1 + lines / 10) / 5, lines = added and removed in source and config files | n lines changed |
-| `hotspot` | 9 | busiest changed source file: commits in the last 90 days / 9 | hotspot: <path> changed Nx in 90 days |
+| `hotspot` | 9 | busiest changed source file: commits in the last 90 days / 9 | `hotspot: PATH changed Nx in 90 days` |
 | `unfamiliar` | 8 | share of changed existing source files the author has not touched before | author has not changed n% of these files before |
 | `spread` | 5 | (directories with changed source or config files - 1) / 5 | spans n directories |
 | `agent` | 5 | 1 if the pull request looks agent-authored | authored by agent (evidence) |
@@ -550,12 +554,55 @@ cache directory first.
   signal.
 - `unfamiliar` compares commit e-mail addresses. In repositories that squash
   merge, the address on the default branch can differ from the one on the
-  branch commits, so the signal fires more often than it should (24% to 43% of
+  branch commits, so the signal fires more often than it should (24.4% to 42.7% of
   pull requests in the report).
 - The weights are hand-set priors, not fitted. They were frozen before the
   first run and not tuned afterwards, which is also why they are not good.
 - Dependents are not measured for languages other than Python and
   JavaScript/TypeScript.
+- All changed paths are passed to git in one call. A pull request with so many
+  changed files that the argument list exceeds the operating system limit
+  cannot be scored: the action fails (and withdraws its own earlier approval),
+  and the backtest skips that pull request.
+
+## Security notes
+
+- The policy is read from the base commit only. A pull request cannot change
+  the rules that score it.
+- `.review-compass.yml` and `.github/workflows/**` are guard paths: always
+  sensitive, cannot be disabled, always block auto-approval. Auto-approval is
+  also blocked for any changed path under `.github/` and for `CODEOWNERS`
+  files.
+- The workflow uses `pull_request`. `pull_request_target` is never used.
+- Code from the pull request is never executed. It is only read through git,
+  with argument lists and no shell strings. Revisions are passed after
+  `--end-of-options`, so a file named like a commit or branch cannot change
+  what git does.
+- Model output is text only. It fills the intent check and the reading-list
+  notes and cannot change the score, the bucket or the approval decision.
+- Text from pull requests (titles, bodies, issues, diffs, file names) is
+  untrusted. It is escaped in the comment and in error summaries, and passed
+  to the model inside delimited blocks with an instruction to treat it as
+  data.
+- Fork pull requests are never auto-approved and get no comment or label.
+- Fail closed: every run on a same-repository pull request that does not end
+  in a fresh approval (not eligible, draft, git error, invalid policy, failed
+  write, changed head, unexpected error) tries to dismiss the action's own
+  earlier approvals. If that dismissal fails, the job fails and names the
+  failure. This does not cover a job that never runs or is cancelled; see the
+  branch protection requirement under [Auto-approval](#auto-approval).
+- "Own approvals" are identified by the bot login only (default
+  `github-actions[bot]`). Approvals given by other workflows under the same
+  login are therefore also dismissed by a non-approving run, even when
+  `auto_approve` is off.
+- Without `ANTHROPIC_API_KEY` no code leaves the runner. With a key, the pull
+  request title, body (first 4000 characters), up to three linked issues
+  (title and first 4000 characters of the body), the paths of the five
+  top-ranked files and their diff are sent to the Anthropic API; the whole
+  message is cut to about `llm.max_input_tokens` (4 characters per token).
+  Set `llm.enabled: false` in the policy file to prevent this even when a key
+  is present. No model call is made for pull requests that change only
+  documentation, generated files or lockfiles.
 
 ## License
 
