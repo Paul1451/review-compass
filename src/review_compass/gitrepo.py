@@ -236,3 +236,16 @@ class GitRepo:
             except GitError:
                 failed.add(spec)
         return failed
+
+    def ref_exists(self, ref: str) -> bool:
+        try:
+            self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        except GitError:
+            return False
+        return True
+
+    def fetch_default_branch(self) -> None:
+        """Bring the checked-out (default) branch of a bare clone up to date with origin."""
+        branch = self._text("symbolic-ref", "--short", "HEAD").strip()
+        spec = f"+refs/heads/{branch}:refs/heads/{branch}"
+        self._run("fetch", "--prune", "origin", "--", spec)

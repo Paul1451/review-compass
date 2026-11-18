@@ -1,6 +1,8 @@
+import subprocess
+
 import pytest
 
-from review_compass.gitrepo import GitError
+from review_compass.gitrepo import GitError, GitRepo
 
 
 def test_changed_files_counts_and_hunks(make_repo) -> None:
@@ -91,3 +93,21 @@ def test_hunks_ignore_plus_plus_plus_content_and_diff_prefix_config(make_repo) -
     assert by["a.py"].hunks == [(3, 3)] and by["a.py"].additions == 1
     assert by["b.py"].hunks == [(2, 2)] and by["b.py"].additions == 1
     assert set(by) == {"a.py", "b.py"}
+
+
+def test_ref_exists(make_repo) -> None:
+    b = make_repo()
+    sha = b.commit({"a.py": "1\n"})
+    b._git("update-ref", "refs/pull/7/head", sha)
+    assert b.repo.ref_exists("refs/pull/7/head")
+    assert not b.repo.ref_exists("refs/pull/8/head")
+
+
+def test_fetch_default_branch_picks_up_new_commits(make_repo, tmp_path) -> None:
+    origin = make_repo()
+    origin.commit({"a.py": "1\n"})
+    clone = tmp_path / "clone.git"
+    subprocess.run(["git", "clone", "-q", "--bare", "--", str(origin.path), str(clone)], check=True)
+    new = origin.commit({"a.py": "2\n"})
+    GitRepo(clone).fetch_default_branch()
+    assert GitRepo(clone).ref_exists(new)
