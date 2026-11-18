@@ -1,0 +1,167 @@
+{
+  "repo": "vercel/next.js",
+  "n": 2704,
+  "skipped_no_head": 13,
+  "buckets": [
+    {
+      "bucket": "low",
+      "n": 1474,
+      "share": 0.5451183431952663,
+      "reverted": 14,
+      "reverted_rate": 0.009497964721845319,
+      "reverted_ci": [
+        0.0056660643322984485,
+        0.015879952507395333
+      ],
+      "fix_followup": 34,
+      "fix_followup_rate": 0.023066485753052916,
+      "fix_followup_ci": [
+        0.01655290324009943,
+        0.03205961382532895
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 18.155
+    },
+    {
+      "bucket": "medium",
+      "n": 943,
+      "share": 0.34874260355029585,
+      "reverted": 15,
+      "reverted_rate": 0.015906680805938492,
+      "reverted_ci": [
+        0.009662923487077259,
+        0.026078640888632473
+      ],
+      "fix_followup": 37,
+      "fix_followup_rate": 0.03923647932131495,
+      "fix_followup_ci": [
+        0.028598249023886736,
+        0.05361360140600567
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 33.889722222222225
+    },
+    {
+      "bucket": "high",
+      "n": 287,
+      "share": 0.10613905325443787,
+      "reverted": 3,
+      "reverted_rate": 0.010452961672473868,
+      "reverted_ci": [
+        0.003561132378040918,
+        0.03027721811927446
+      ],
+      "fix_followup": 12,
+      "fix_followup_rate": 0.041811846689895474,
+      "fix_followup_ci": [
+        0.02407710072228134,
+        0.07165060810616689
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 45.65277777777778
+    }
+  ],
+  "auc_reverted": 0.5374134543413174,
+  "auc_fix_followup": 0.5829123437665197,
+  "spearman_review_threads": 0.18683384627378774,
+  "low_share": 0.5451183431952663,
+  "reverted_total": 32,
+  "reverted_in_low": 14,
+  "signal_fire_rate": {
+    "sensitive_path": 0.20525147928994084,
+    "no_tests": 0.3039940828402367,
+    "dependents": 0.39644970414201186,
+    "size": 0.7540680473372781,
+    "hotspot": 0.6412721893491125,
+    "unfamiliar": 0.3657544378698225,
+    "spread": 0.45821005917159763,
+    "agent": 0.1823224852071006
+  },
+  "agent": {
+    "repo": "vercel/next.js",
+    "n": 569,
+    "skipped_no_head": 0,
+    "buckets": [
+      {
+        "bucket": "low",
+        "n": 266,
+        "share": 0.46748681898066785,
+        "reverted": 0,
+        "reverted_rate": 0.0,
+        "reverted_ci": [
+          0.0,
+          0.014236500228282073
+        ],
+        "fix_followup": 2,
+        "fix_followup_rate": 0.007518796992481203,
+        "fix_followup_ci": [
+          0.0020643095758599486,
+          0.026995701927184805
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 18.09375
+      },
+      {
+        "bucket": "medium",
+        "n": 227,
+        "share": 0.3989455184534271,
+        "reverted": 3,
+        "reverted_rate": 0.013215859030837005,
+        "reverted_ci": [
+          0.004504498203009629,
+          0.038129065244826454
+        ],
+        "fix_followup": 14,
+        "fix_followup_rate": 0.06167400881057269,
+        "fix_followup_ci": [
+          0.037089497524374765,
+          0.10084751209607493
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 43.88638888888889
+      },
+      {
+        "bucket": "high",
+        "n": 76,
+        "share": 0.1335676625659051,
+        "reverted": 1,
+        "reverted_rate": 0.013157894736842105,
+        "reverted_ci": [
+          0.002326420140567463,
+          0.0708384462949749
+        ],
+        "fix_followup": 6,
+        "fix_followup_rate": 0.07894736842105263,
+        "fix_followup_ci": [
+          0.03668350552145426,
+          0.1617293519363121
+        ],
+        "median_review_threads": 1.0,
+        "median_hours_to_merge": 95.42055555555555
+      }
+    ],
+    "auc_reverted": 0.7101769911504425,
+    "auc_fix_followup": 0.7470500249293668,
+    "spearman_review_threads": 0.22855075353307772,
+    "low_share": 0.46748681898066785,
+    "reverted_total": 4,
+    "reverted_in_low": 0,
+    "signal_fire_rate": {
+      "sensitive_path": 0.2056239015817223,
+      "no_tests": 0.3268892794376098,
+      "dependents": 0.3462214411247803,
+      "size": 0.7504393673110721,
+      "hotspot": 0.6133567662565905,
+      "unfamiliar": 0.46748681898066785,
+      "spread": 0.45694200351493847,
+      "agent": 0.8664323374340949
+    },
+    "agent": null,
+    "policy_fingerprint": "eea628015697",
+    "tool_version": "0.1.0",
+    "generated_at": "2026-11-18T00:34:56.996089Z"
+  },
+  "policy_fingerprint": "eea628015697",
+  "tool_version": "0.1.0",
+  "generated_at": "2026-11-18T00:34:56.996089Z"
+}

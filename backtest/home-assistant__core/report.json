@@ -1,0 +1,167 @@
+{
+  "repo": "home-assistant/core",
+  "n": 1386,
+  "skipped_no_head": 0,
+  "buckets": [
+    {
+      "bucket": "low",
+      "n": 1030,
+      "share": 0.7431457431457431,
+      "reverted": 1,
+      "reverted_rate": 0.000970873786407767,
+      "reverted_ci": [
+        0.00017139921701028434,
+        0.005478982814434378
+      ],
+      "fix_followup": 10,
+      "fix_followup_rate": 0.009708737864077669,
+      "fix_followup_ci": [
+        0.005281979564597209,
+        0.01777919344295056
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 3.654166666666667
+    },
+    {
+      "bucket": "medium",
+      "n": 330,
+      "share": 0.23809523809523808,
+      "reverted": 0,
+      "reverted_rate": 0.0,
+      "reverted_ci": [
+        0.0,
+        0.011507253739498012
+      ],
+      "fix_followup": 4,
+      "fix_followup_rate": 0.012121212121212121,
+      "fix_followup_ci": [
+        0.004723447259738547,
+        0.03074726699516557
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 2.1615277777777777
+    },
+    {
+      "bucket": "high",
+      "n": 26,
+      "share": 0.01875901875901876,
+      "reverted": 0,
+      "reverted_rate": 0.0,
+      "reverted_ci": [
+        0.0,
+        0.12873304380462175
+      ],
+      "fix_followup": 0,
+      "fix_followup_rate": 0.0,
+      "fix_followup_ci": [
+        0.0,
+        0.12873304380462175
+      ],
+      "median_review_threads": 0.5,
+      "median_hours_to_merge": 2.966388888888889
+    }
+  ],
+  "auc_reverted": 0.5812274368231047,
+  "auc_fix_followup": 0.5325385256143274,
+  "spearman_review_threads": 0.11910278722374816,
+  "low_share": 0.7431457431457431,
+  "reverted_total": 1,
+  "reverted_in_low": 1,
+  "signal_fire_rate": {
+    "sensitive_path": 0.15945165945165946,
+    "no_tests": 0.1984126984126984,
+    "dependents": 0.48484848484848486,
+    "size": 0.9155844155844156,
+    "hotspot": 0.6536796536796536,
+    "unfamiliar": 0.42712842712842713,
+    "spread": 0.23737373737373738,
+    "agent": 0.35858585858585856
+  },
+  "agent": {
+    "repo": "home-assistant/core",
+    "n": 498,
+    "skipped_no_head": 0,
+    "buckets": [
+      {
+        "bucket": "low",
+        "n": 309,
+        "share": 0.6204819277108434,
+        "reverted": 0,
+        "reverted_rate": 0.0,
+        "reverted_ci": [
+          0.0,
+          0.01227969681781451
+        ],
+        "fix_followup": 4,
+        "fix_followup_rate": 0.012944983818770227,
+        "fix_followup_ci": [
+          0.005045174496708818,
+          0.032806569005434126
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 4.655277777777778
+      },
+      {
+        "bucket": "medium",
+        "n": 182,
+        "share": 0.3654618473895582,
+        "reverted": 0,
+        "reverted_rate": 0.0,
+        "reverted_ci": [
+          0.0,
+          0.020671367444102935
+        ],
+        "fix_followup": 2,
+        "fix_followup_rate": 0.01098901098901099,
+        "fix_followup_ci": [
+          0.0030187111424065383,
+          0.03917636251171611
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 1.0244444444444443
+      },
+      {
+        "bucket": "high",
+        "n": 7,
+        "share": 0.014056224899598393,
+        "reverted": 0,
+        "reverted_rate": 0.0,
+        "reverted_ci": [
+          0.0,
+          0.35433884297520657
+        ],
+        "fix_followup": 0,
+        "fix_followup_rate": 0.0,
+        "fix_followup_ci": [
+          0.0,
+          0.35433884297520657
+        ],
+        "median_review_threads": 4.0,
+        "median_hours_to_merge": 5.495
+      }
+    ],
+    "auc_reverted": null,
+    "auc_fix_followup": 0.4854336043360434,
+    "spearman_review_threads": 0.04564635794095293,
+    "low_share": 0.6204819277108434,
+    "reverted_total": 0,
+    "reverted_in_low": 0,
+    "signal_fire_rate": {
+      "sensitive_path": 0.10642570281124498,
+      "no_tests": 0.29116465863453816,
+      "dependents": 0.45582329317269077,
+      "size": 0.9176706827309237,
+      "hotspot": 0.6405622489959839,
+      "unfamiliar": 0.6526104417670683,
+      "spread": 0.1566265060240964,
+      "agent": 0.9979919678714859
+    },
+    "agent": null,
+    "policy_fingerprint": "eea628015697",
+    "tool_version": "0.1.0",
+    "generated_at": "2026-11-18T00:34:56.996089Z"
+  },
+  "policy_fingerprint": "eea628015697",
+  "tool_version": "0.1.0",
+  "generated_at": "2026-11-18T00:34:56.996089Z"
+}

@@ -1,0 +1,167 @@
+{
+  "repo": "pydantic/pydantic",
+  "n": 2971,
+  "skipped_no_head": 1,
+  "buckets": [
+    {
+      "bucket": "low",
+      "n": 1924,
+      "share": 0.6475934028946483,
+      "reverted": 8,
+      "reverted_rate": 0.004158004158004158,
+      "reverted_ci": [
+        0.0021083944981019403,
+        0.00818373738659232
+      ],
+      "fix_followup": 13,
+      "fix_followup_rate": 0.006756756756756757,
+      "fix_followup_ci": [
+        0.003952921151846946,
+        0.01152635888858791
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 6.48
+    },
+    {
+      "bucket": "medium",
+      "n": 815,
+      "share": 0.27431841130932344,
+      "reverted": 4,
+      "reverted_rate": 0.0049079754601227,
+      "reverted_ci": [
+        0.0019101907255844033,
+        0.012551214264098585
+      ],
+      "fix_followup": 5,
+      "fix_followup_rate": 0.006134969325153374,
+      "fix_followup_ci": [
+        0.002623216395557247,
+        0.014280663426865063
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 8.119444444444444
+    },
+    {
+      "bucket": "high",
+      "n": 232,
+      "share": 0.07808818579602828,
+      "reverted": 0,
+      "reverted_rate": 0.0,
+      "reverted_ci": [
+        0.0,
+        0.01628889898983046
+      ],
+      "fix_followup": 0,
+      "fix_followup_rate": 0.0,
+      "fix_followup_ci": [
+        0.0,
+        0.01628889898983046
+      ],
+      "median_review_threads": 0.0,
+      "median_hours_to_merge": 7.423611111111111
+    }
+  ],
+  "auc_reverted": 0.4608961360820097,
+  "auc_fix_followup": 0.4712627459833691,
+  "spearman_review_threads": 0.16207626166283165,
+  "low_share": 0.6475934028946483,
+  "reverted_total": 12,
+  "reverted_in_low": 8,
+  "signal_fire_rate": {
+    "sensitive_path": 0.21373274991585325,
+    "no_tests": 0.24537192864355437,
+    "dependents": 0.5604173678895995,
+    "size": 0.7515987882867722,
+    "hotspot": 0.6142712891282397,
+    "unfamiliar": 0.24368899360484686,
+    "spread": 0.23157186132615282,
+    "agent": 0.010770784247728038
+  },
+  "agent": {
+    "repo": "pydantic/pydantic",
+    "n": 39,
+    "skipped_no_head": 0,
+    "buckets": [
+      {
+        "bucket": "low",
+        "n": 25,
+        "share": 0.6410256410256411,
+        "reverted": 0,
+        "reverted_rate": 0.0,
+        "reverted_ci": [
+          0.0,
+          0.13319649395317873
+        ],
+        "fix_followup": 0,
+        "fix_followup_rate": 0.0,
+        "fix_followup_ci": [
+          0.0,
+          0.13319649395317873
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 3.3369444444444443
+      },
+      {
+        "bucket": "medium",
+        "n": 14,
+        "share": 0.358974358974359,
+        "reverted": 1,
+        "reverted_rate": 0.07142857142857142,
+        "reverted_ci": [
+          0.012721886112291636,
+          0.3146926955395781
+        ],
+        "fix_followup": 1,
+        "fix_followup_rate": 0.07142857142857142,
+        "fix_followup_ci": [
+          0.012721886112291636,
+          0.3146926955395781
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 5.608888888888889
+      },
+      {
+        "bucket": "high",
+        "n": 0,
+        "share": 0.0,
+        "reverted": 0,
+        "reverted_rate": 0.0,
+        "reverted_ci": [
+          0.0,
+          0.0
+        ],
+        "fix_followup": 0,
+        "fix_followup_rate": 0.0,
+        "fix_followup_ci": [
+          0.0,
+          0.0
+        ],
+        "median_review_threads": 0.0,
+        "median_hours_to_merge": 0.0
+      }
+    ],
+    "auc_reverted": 0.7631578947368421,
+    "auc_fix_followup": 0.7631578947368421,
+    "spearman_review_threads": 0.13450808643961254,
+    "low_share": 0.6410256410256411,
+    "reverted_total": 1,
+    "reverted_in_low": 0,
+    "signal_fire_rate": {
+      "sensitive_path": 0.10256410256410256,
+      "no_tests": 0.15384615384615385,
+      "dependents": 0.3333333333333333,
+      "size": 0.5897435897435898,
+      "hotspot": 0.48717948717948717,
+      "unfamiliar": 0.15384615384615385,
+      "spread": 0.1282051282051282,
+      "agent": 0.8205128205128205
+    },
+    "agent": null,
+    "policy_fingerprint": "eea628015697",
+    "tool_version": "0.1.0",
+    "generated_at": "2026-11-18T00:34:56.996089Z"
+  },
+  "policy_fingerprint": "eea628015697",
+  "tool_version": "0.1.0",
+  "generated_at": "2026-11-18T00:34:56.996089Z"
+}
