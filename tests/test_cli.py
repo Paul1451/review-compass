@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -160,3 +161,90 @@ def test_stdout_verbatim_outside_actions(
     lines, _ = _run_pr_stdout(tmp_path, monkeypatch, capsys, HOSTILE)
     assert lines == HOSTILE.split("\n") + [""]
     assert not any(line.startswith("::stop-commands::") for line in lines)
+
+
+# -- backtest and report ---------------------------------------------------------------
+
+
+def test_backtest_without_token_exits_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "_github_token", lambda: None)
+    assert cli.main(["backtest", "o/r"]) == 2
+    assert "No GitHub token: set GITHUB_TOKEN or log in with gh" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [["o/r", "--limit", "0"], ["o/r", "--limit", "20001"], ["bad"]])
+def test_backtest_rejects_bad_arguments(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_github_token", lambda: "t")
+    assert cli.main(["backtest", *argv]) == 2
+
+
+def test_backtest_runs_every_repo_and_writes_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from review_compass.backtest.metrics import compute_report
+    from review_compass.policy import load_policy
+
+    seen: list[tuple[str, int]] = []
+
+    def fake_run(repo: str, limit: int, out_dir: Path, *args: object, **kw: object):  # type: ignore[no-untyped-def]
+        seen.append((repo, limit))
+        return compute_report(repo, [], 0, load_policy(None), args[-1])  # type: ignore[arg-type]
+
+    monkeypatch.setattr(cli, "_github_token", lambda: "t")
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+    out = tmp_path / "out"
+    assert cli.main(["backtest", "a/b", "c/d", "--limit", "5", "--out", str(out)]) == 0
+    assert seen == [("a/b", 5), ("c/d", 5)]
+    text = (out / "REPORT.md").read_text()
+    assert "## a/b" in text and "## c/d" in text
+
+
+def test_backtest_unexpected_error_prints_type_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def boom(*args: object, **kw: object) -> None:
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr(cli, "_github_token", lambda: "t")
+    monkeypatch.setattr(cli, "run_backtest", boom)
+    assert cli.main(["backtest", "o/r"]) == 1
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err and "secret detail" not in err
+
+
+def test_github_token_prefers_env_then_gh(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "from-env")
+    assert cli._github_token() == "from-env"
+    monkeypatch.delenv("GITHUB_TOKEN")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="from-gh\n", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli._github_token() == "from-gh" and calls == [["gh", "auth", "token"]]
+
+    def failing(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="no")
+
+    monkeypatch.setattr(cli.subprocess, "run", failing)
+    assert cli._github_token() is None
+
+
+def test_report_rebuilds_markdown_from_json(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from review_compass.backtest.metrics import compute_report
+    from review_compass.policy import load_policy
+
+    rep = compute_report("o/r", [], 0, load_policy(None), datetime(2026, 3, 1, tzinfo=UTC))
+    (tmp_path / "o__r").mkdir()
+    (tmp_path / "o__r" / "report.json").write_text(rep.model_dump_json())
+    assert cli.main(["report", str(tmp_path)]) == 0
+    assert "## o/r" in (tmp_path / "REPORT.md").read_text()
+    assert cli.main(["report", str(tmp_path / "missing")]) == 2
