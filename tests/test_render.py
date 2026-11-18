@@ -28,6 +28,11 @@ def _high() -> RiskResult:
                 signal="sensitive", points=25, reason="touches sensitive path: auth/session.py"
             ),
             Contribution(signal="no_tests", points=18, reason="source changed, no test changes"),
+            Contribution(signal="dependents", points=15, reason="12 files depend on changed modules"),
+            Contribution(
+                signal="hotspot", points=9, reason="hotspot: auth/session.py changed 9x in 90 days"
+            ),
+            Contribution(signal="spread", points=5, reason="spans 6 directories"),
         ],
         files=[
             _rank("auth/session.py", span=(88, 140)),
@@ -35,7 +40,7 @@ def _high() -> RiskResult:
             *[_rank(f"d{i}.md", skim=True) for i in range(1, 10)],
         ],
         guard_touched=False,
-        notes=["dependents: not measured (unsupported language)"],
+        notes=[],
     )
 
 

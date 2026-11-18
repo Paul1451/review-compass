@@ -4,6 +4,9 @@
 **Why**
 - touches sensitive path: auth/session.py (+25)
 - source changed, no test changes (+18)
+- 12 files depend on changed modules (+15)
+- hotspot: auth/session.py changed 9x in 90 days (+9)
+- spans 6 directories (+5)
 
 **Intent check**
 Issue \#31 asks for a logout fix. This PR also changes token lifetime.
@@ -14,5 +17,3 @@ Issue \#31 asks for a logout fix. This PR also changes token lifetime.
 
 **Skim (9 files)**
 `d1.md`, `d2.md`, `d3.md`, `d4.md`, `d5.md`, `d6.md`, `d7.md`, `d8.md`, …and 1 more
-
-<sub>Notes: dependents: not measured (unsupported language)</sub>
