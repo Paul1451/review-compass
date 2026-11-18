@@ -30,6 +30,10 @@ def _num(x: float | None) -> str:
     return "n/a" if x is None else fmt(x, 3)
 
 
+def _ratio(x: float | None) -> str:
+    return "n/a" if x is None else f"{fmt(x, 2)}x"
+
+
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
 _VERSION_RE = re.compile(r"^[0-9A-Za-z.+-]{1,40}$")
 
@@ -52,19 +56,22 @@ def _row(b: BucketStats) -> str:
     return (
         f"| {b.bucket} | {b.n} | {pct(b.share)} | {_rate_ci(b.reverted_rate, b.reverted_ci)} "
         f"| {_rate_ci(b.fix_followup_rate, b.fix_followup_ci)} "
-        f"| {fmt(b.median_review_threads, 1)} | {fmt(b.median_hours_to_merge, 1)} |"
+        f"| {fmt(b.median_review_threads, 1)} | {fmt(b.median_hours_to_merge, 1)} "
+        f"| {pct(b.changes_requested_share)} |"
     )
 
 
 def _table(report: RepoReport) -> list[str]:
     return [
         "| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) "
-        "| Median review threads | Median hours to merge |",
-        "|---|---:|---:|---|---|---:|---:|",
+        "| Median review threads | Median hours to merge | Changes requested |",
+        "|---|---:|---:|---|---|---:|---:|---:|",
         *(_row(b) for b in report.buckets),
         "",
         f"Skimming low-risk PRs would cover {pct(report.low_share)} of PRs and contain "
         f"{report.reverted_in_low} of {report.reverted_total} reverted PRs.",
+        "",
+        f"Reverted rate, high bucket divided by low bucket: {_ratio(report.high_low_revert_ratio)}",
         "",
     ]
 

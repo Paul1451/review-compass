@@ -20,7 +20,9 @@
         0.01152635888858791
       ],
       "median_review_threads": 0.0,
-      "median_hours_to_merge": 6.48
+      "median_hours_to_merge": 6.48,
+      "changes_requested": 127,
+      "changes_requested_share": 0.06600831600831601
     },
     {
       "bucket": "medium",
@@ -39,7 +41,9 @@
         0.014280663426865063
       ],
       "median_review_threads": 0.0,
-      "median_hours_to_merge": 8.119444444444444
+      "median_hours_to_merge": 8.119444444444444,
+      "changes_requested": 59,
+      "changes_requested_share": 0.07239263803680981
     },
     {
       "bucket": "high",
@@ -58,7 +62,9 @@
         0.01628889898983046
       ],
       "median_review_threads": 0.0,
-      "median_hours_to_merge": 7.423611111111111
+      "median_hours_to_merge": 7.423611111111111,
+      "changes_requested": 19,
+      "changes_requested_share": 0.08189655172413793
     }
   ],
   "auc_reverted": 0.4608961360820097,
@@ -67,6 +73,7 @@
   "low_share": 0.6475934028946483,
   "reverted_total": 12,
   "reverted_in_low": 8,
+  "high_low_revert_ratio": 0.0,
   "signal_fire_rate": {
     "sensitive_path": 0.21373274991585325,
     "no_tests": 0.24537192864355437,
@@ -99,7 +106,9 @@
           0.13319649395317873
         ],
         "median_review_threads": 0.0,
-        "median_hours_to_merge": 3.3369444444444443
+        "median_hours_to_merge": 3.3369444444444443,
+        "changes_requested": 0,
+        "changes_requested_share": 0.0
       },
       {
         "bucket": "medium",
@@ -118,7 +127,9 @@
           0.3146926955395781
         ],
         "median_review_threads": 0.0,
-        "median_hours_to_merge": 5.608888888888889
+        "median_hours_to_merge": 5.608888888888889,
+        "changes_requested": 0,
+        "changes_requested_share": 0.0
       },
       {
         "bucket": "high",
@@ -137,7 +148,9 @@
           0.0
         ],
         "median_review_threads": 0.0,
-        "median_hours_to_merge": 0.0
+        "median_hours_to_merge": 0.0,
+        "changes_requested": 0,
+        "changes_requested_share": 0.0
       }
     ],
     "auc_reverted": 0.7631578947368421,
@@ -146,6 +159,7 @@
     "low_share": 0.6410256410256411,
     "reverted_total": 1,
     "reverted_in_low": 0,
+    "high_low_revert_ratio": null,
     "signal_fire_rate": {
       "sensitive_path": 0.10256410256410256,
       "no_tests": 0.15384615384615385,

@@ -53,4 +53,29 @@ def test_fmt_is_half_up() -> None:
 def test_report_uses_half_up_for_medians(tmp_path: Path) -> None:
     rows = [row(10, "low", hours=1.25)]
     write_reports([compute_report("o/r", rows, 0, load_policy(None), NOW)], tmp_path)
-    assert "| 0.0 | 1.3 |" in (tmp_path / "REPORT.md").read_text()
+    assert "| 0.0 | 1.3 | 0.0% |" in (tmp_path / "REPORT.md").read_text()
+
+
+def test_high_to_low_ratio_and_changes_requested_share(tmp_path: Path) -> None:
+    rows = (
+        [row(10, "low", reverted=True, changes_requested=1)]
+        + [row(10, "low")] * 9
+        + [row(70, "high", reverted=True, changes_requested=2)]
+        + [row(70, "high", changes_requested=1)]
+    )
+    report = compute_report("o/r", rows, 0, load_policy(None), NOW)
+    assert report.high_low_revert_ratio == pytest.approx(0.5 / 0.1)
+    assert report.buckets[0].changes_requested_share == pytest.approx(0.1)
+    assert report.buckets[2].changes_requested_share == pytest.approx(1.0)
+    write_reports([report], tmp_path)
+    text = (tmp_path / "REPORT.md").read_text()
+    assert "high bucket divided by low bucket: 5.00x" in text
+    assert "| 100.0% |" in text
+
+
+def test_ratio_is_not_available_when_low_rate_is_zero(tmp_path: Path) -> None:
+    rows = [row(10, "low")] * 4 + [row(70, "high", reverted=True)]
+    report = compute_report("o/r", rows, 0, load_policy(None), NOW)
+    assert report.high_low_revert_ratio is None
+    write_reports([report], tmp_path)
+    assert "high bucket divided by low bucket: n/a" in (tmp_path / "REPORT.md").read_text()

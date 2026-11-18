@@ -62,6 +62,8 @@ class BucketStats(BaseModel):
     fix_followup_ci: tuple[float, float]
     median_review_threads: float
     median_hours_to_merge: float
+    changes_requested: int = 0  # PRs with at least one changes-requested review
+    changes_requested_share: float = 0.0
 
 
 class RepoReport(BaseModel):
@@ -75,6 +77,7 @@ class RepoReport(BaseModel):
     low_share: float
     reverted_total: int
     reverted_in_low: int
+    high_low_revert_ratio: float | None = None  # None when the low rate is 0
     signal_fire_rate: dict[str, float]
     agent: "RepoReport | None"
     policy_fingerprint: str
@@ -164,6 +167,7 @@ def _bucket_stats(bucket: Bucket, rows: Sequence[Row], total: int) -> BucketStat
     n = len(members)
     reverted = sum(1 for r in members if r.outcome.reverted)
     followup = sum(1 for r in members if r.outcome.fix_followup)
+    requested = sum(1 for r in members if r.outcome.changes_requested > 0)
     return BucketStats(
         bucket=bucket,
         n=n,
@@ -176,6 +180,8 @@ def _bucket_stats(bucket: Bucket, rows: Sequence[Row], total: int) -> BucketStat
         fix_followup_ci=wilson_interval(followup, n),
         median_review_threads=_median([r.outcome.review_threads for r in members]),
         median_hours_to_merge=_median([r.outcome.hours_to_merge for r in members]),
+        changes_requested=requested,
+        changes_requested_share=_rate(requested, n),
     )
 
 
@@ -208,6 +214,9 @@ def _compute(
         low_share=low.share,
         reverted_total=sum(1 for r in rows if r.outcome.reverted),
         reverted_in_low=low.reverted,
+        high_low_revert_ratio=(
+            buckets[2].reverted_rate / low.reverted_rate if low.reverted_rate > 0 else None
+        ),
         signal_fire_rate={
             name: _rate(sum(1 for r in rows if r.signals.get(name, 0) > 0), total)
             for name in Weights.model_fields

@@ -116,6 +116,7 @@ def row(
     signals: dict[str, int] | None = None,
     threads: int = 0,
     hours: float = 1.0,
+    changes_requested: int = 0,
 ) -> Row:
     return Row(
         repo="o/r",
@@ -128,7 +129,7 @@ def row(
             reverted=reverted,
             fix_followup=fix_followup or reverted,
             review_threads=threads,
-            changes_requested=0,
+            changes_requested=changes_requested,
             hours_to_merge=hours,
         ),
     )
