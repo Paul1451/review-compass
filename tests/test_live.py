@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
 from conftest import RepoBuilder
 
 from review_compass.github import GitHubError
@@ -189,7 +190,7 @@ def test_draft_is_skipped(make_repo: RepoFactory) -> None:
     out = run_pr(event_for(base, head, draft=True), path, gh, None)  # type: ignore[arg-type]
     assert out.exit_code == 0
     assert out.summary == "Skipped: draft pull request"
-    assert gh.calls == []
+    assert gh.names() == ["dismiss_own_approvals"]
 
 
 def test_fork_writes_summary_only(make_repo: RepoFactory) -> None:
@@ -220,7 +221,7 @@ def test_invalid_base_policy_exits_2(make_repo: RepoFactory) -> None:
     out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
     assert out.exit_code == 2
     assert out.summary.startswith("Invalid .review-compass.yml on base branch:")
-    assert gh.calls == []
+    assert gh.names() == ["dismiss_own_approvals"]
 
 
 def test_shallow_clone_exits_2_with_hint(make_repo: RepoFactory) -> None:
@@ -229,7 +230,7 @@ def test_shallow_clone_exits_2_with_hint(make_repo: RepoFactory) -> None:
     out = run_pr(event_for("0" * 40, head), path, gh, None)  # type: ignore[arg-type]
     assert out.exit_code == 2
     assert "fetch-depth: 0" in out.summary
-    assert gh.calls == []
+    assert gh.names() == ["dismiss_own_approvals"]
 
 
 def test_write_refused_still_succeeds(make_repo: RepoFactory) -> None:
@@ -321,7 +322,7 @@ def test_head_changed_skips_approval_and_dismissal(make_repo: RepoFactory) -> No
     out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
     assert out.exit_code == 0
     assert not gh.args("approve")
-    assert not gh.args("dismiss_own_approvals")
+    assert gh.args("dismiss_own_approvals")
     assert "> Note: pull request head changed during the run; approval skipped." in out.summary
 
 
@@ -340,7 +341,7 @@ def test_head_sha_failure_means_no_approval(make_repo: RepoFactory) -> None:
     out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
     assert out.exit_code == 0
     assert not gh.args("approve")
-    assert not gh.args("dismiss_own_approvals")
+    assert gh.args("dismiss_own_approvals")
     assert "approval skipped" in out.summary
 
 
@@ -370,12 +371,13 @@ def test_approve_failure_warns(make_repo: RepoFactory) -> None:
     assert "HTTP 422" in out.summary
 
 
-def test_dismiss_failure_warns(make_repo: RepoFactory) -> None:
+def test_dismiss_failure_warns(make_repo: RepoFactory, capsys: pytest.CaptureFixture[str]) -> None:
     path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": LINES})
     gh = FakeGH(fail={"dismiss_own_approvals": 403})
     out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
-    assert out.exit_code == 0
-    assert "HTTP 403" in out.summary
+    assert out.exit_code == 2  # a surviving approval must fail the job
+    assert "could not withdraw earlier approvals (HTTP 403)" in out.summary
+    assert "dismiss earlier approvals (GitHubError)" in capsys.readouterr().err
 
 
 def test_malformed_payloads_exit_2(tmp_path: Path) -> None:
@@ -396,3 +398,177 @@ def test_malformed_payloads_exit_2(tmp_path: Path) -> None:
         out = run_pr(event, tmp_path, None, None)
         assert out.exit_code == 2
         assert out.summary == message
+
+
+# -- F1: fail closed on every exit that does not end in a fresh approval ----------------------
+
+
+def test_git_error_exit_dismisses_and_hint_only_for_missing_commits(make_repo: RepoFactory) -> None:
+    path, _, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    gh = FakeGH()
+    out = run_pr(event_for("0" * 40, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 2 and "fetch-depth: 0" in out.summary
+    assert gh.args("dismiss_own_approvals")
+    from review_compass.gitrepo import GitError
+    from review_compass.live import _git_error_summary
+
+    assert "fetch-depth" not in _git_error_summary(GitError("git diff failed: Permission denied"))
+
+
+def test_file_named_like_merge_base_does_not_break_the_run(make_repo: RepoFactory) -> None:
+    repo = make_repo()
+    base = repo.commit(
+        {".review-compass.yml": "auto_approve: true\n", "README.md": "a\n"}, "base"
+    )
+    repo.branch("feature")
+    head = repo.commit({base: "decoy\n", "src/app.py": LINES}, "head")
+    gh = FakeGH(head=head)
+    out = run_pr(event_for(base, head), repo.path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 0 and out.result is not None
+    assert gh.args("approve")  # the run completed normally despite the decoy file
+    assert not gh.args("dismiss_own_approvals")
+
+
+def test_unexpected_exception_dismisses_then_reraises(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    gh = FakeGH()
+
+    class Boom:
+        def complete(self, **_: Any) -> dict[str, Any]:
+            raise RuntimeError("boom")
+
+    gh.issues_error = RuntimeError("unexpected")
+    with pytest.raises(RuntimeError, match="unexpected"):
+        run_pr(event_for(base, head), path, gh, Boom())  # type: ignore[arg-type]
+    assert gh.names()[-1] == "dismiss_own_approvals"
+
+
+def test_failing_dismissal_does_not_mask_original_exception(
+    make_repo: RepoFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    gh = FakeGH(fail={"dismiss_own_approvals": 403})
+    gh.issues_error = RuntimeError("unexpected")
+    with pytest.raises(RuntimeError, match="unexpected"):
+        run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert "dismiss earlier approvals (GitHubError)" in capsys.readouterr().err
+
+
+def test_invalid_policy_dismissal_failure_is_visible(
+    make_repo: RepoFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bad: dict[str, str | bytes | None] = {".review-compass.yml": "thresholds: nope\n"}
+    path, base, head = build(make_repo, bad, {"a.py": "1\n"})
+    gh = FakeGH(fail={"dismiss_own_approvals": 500})
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 2
+    assert out.summary.startswith("Invalid .review-compass.yml on base branch:")
+    assert "could not withdraw earlier approvals (HTTP 500)" in out.summary
+    assert "(GitHubError)" in capsys.readouterr().err
+
+
+def test_draft_dismissal_failure_is_visible(
+    make_repo: RepoFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path, base, head = build(make_repo, {"README.md": "a\n"}, {"src/a.py": "x = 1\n"})
+    gh = FakeGH(fail={"dismiss_own_approvals": 403})
+    out = run_pr(event_for(base, head, draft=True), path, gh, None)  # type: ignore[arg-type]
+    assert out.exit_code == 2 and out.summary.startswith("Skipped: draft pull request")
+    assert "could not dismiss" in capsys.readouterr().err
+
+
+def test_eligible_but_label_failure_dismisses(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(fail={"set_bucket_label": 403}, head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert not gh.args("approve") and gh.args("dismiss_own_approvals")
+
+
+def test_eligible_but_comment_failure_dismisses(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(fail={"upsert_comment": 403}, head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert not gh.args("approve") and gh.args("dismiss_own_approvals")
+
+
+def test_approve_failure_dismisses(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(fail={"approve": 422}, head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert gh.args("dismiss_own_approvals")
+
+
+def test_happy_path_does_not_dismiss(make_repo: RepoFactory) -> None:
+    path, base, head = build(make_repo, APPROVE_POLICY, {"README.md": "b\n"})
+    gh = FakeGH(head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert gh.args("approve") and not gh.args("dismiss_own_approvals")
+
+
+def test_error_summaries_are_escaped(make_repo: RepoFactory) -> None:
+    bad: dict[str, str | bytes | None] = {".review-compass.yml": "thresholds: [x](http://evil)\n"}
+    path, base, head = build(make_repo, bad, {"a.py": "1\n"})
+    out = run_pr(event_for(base, head), path, None, None)
+    assert out.exit_code == 2
+    assert "[x](http" not in out.summary and "http://evil" not in out.summary
+
+
+# -- F2 / F16: files the score cannot judge never auto-approve --------------------------------
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"package-lock.json": '{"a": 2}\n'},
+        {"vendor/lib/api.py": "x = 2\n"},
+        {"docs/conf.py": "x = 2\n"},
+        {"docs/run.sh": "echo 2\n"},
+        {"gradle/wrapper/gradle-wrapper.jar": b"\x00\x01"},
+        {".github/actions/x/action.yml": "a: 2\n"},
+        {".github/CODEOWNERS": "* @x\n"},
+        {"CODEOWNERS": "* @x\n"},
+        {"docs/CODEOWNERS": "* @x\n"},
+    ],
+)
+def test_no_auto_approval_for_unjudgeable_files(
+    make_repo: RepoFactory, files: dict[str, str | bytes | None]
+) -> None:
+    base_files: dict[str, str | bytes | None] = {
+        ".review-compass.yml": "auto_approve: true\n",
+        "package-lock.json": '{"a": 1}\n',
+        "vendor/lib/api.py": "x = 1\n",
+        "docs/conf.py": "x = 1\n",
+        "docs/run.sh": "echo 1\n",
+        "gradle/wrapper/gradle-wrapper.jar": b"\x00",
+        ".github/actions/x/action.yml": "a: 1\n",
+        ".github/CODEOWNERS": "* @y\n",
+        "CODEOWNERS": "* @y\n",
+        "docs/CODEOWNERS": "* @y\n",
+    }
+    path, base, head = build(make_repo, base_files, files)
+    gh = FakeGH(head=head)
+    out = run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert out.result is not None and out.result.bucket == "low"
+    assert not gh.args("approve")
+    assert gh.args("dismiss_own_approvals")
+
+
+def test_rename_out_of_github_dir_blocks_auto_approval(make_repo: RepoFactory) -> None:
+    body = "name: x\non: push\njobs: {}\n" * 3
+    path, base, head = build(
+        make_repo,
+        {".review-compass.yml": "auto_approve: true\n", ".github/actions/a.yml": body},
+        {".github/actions/a.yml": None, "docs/a.md": body},
+    )
+    gh = FakeGH(head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert not gh.args("approve")
+
+
+def test_plain_docs_still_auto_approved(make_repo: RepoFactory) -> None:
+    path, base, head = build(
+        make_repo, {**APPROVE_POLICY, "docs/guide.md": "a\n"}, {"docs/guide.md": "b\n"}
+    )
+    gh = FakeGH(head=head)
+    run_pr(event_for(base, head), path, gh, None)  # type: ignore[arg-type]
+    assert gh.args("approve")
