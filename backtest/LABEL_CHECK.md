@@ -1,9 +1,15 @@
-# Hand check of the outcome labels
+# Label check of the outcome labels
 
 The backtest labels each merged PR as `reverted` and/or `fix_followup` with the
 rules in `src/review_compass/backtest/outcomes.py`. Before trusting the numbers
-in `REPORT.md`, the labels were checked by eye against the commit history and
-the pull requests on GitHub (2026-11-18, policy fingerprint `eea628015697`).
+in `REPORT.md`, the labels were checked against the commit history and the pull
+requests on GitHub (2026-11-18, policy fingerprint `eea628015697`).
+
+**Who did the check:** an AI assistant (Claude, run by the author) read the
+commit history and the pull request pages. The check was not independently
+verified by a person. The pooled and sensitivity numbers below can be
+reproduced with `python backtest/derive_numbers.py`; the list of missed PRs is a
+constant in that script.
 
 - **Precision:** is a labelled PR really reverted / really followed by a fix?
 - **Recall:** which revert commits in the same time span did the rules miss?
@@ -94,7 +100,7 @@ reverted PRs from the rest in a useful way.
 ## Pooled counts
 
 All three repositories together (7061 evaluated PRs), from the `rows.jsonl`
-files in this directory:
+files in this directory (printed by `derive_numbers.py`):
 
 | Bucket | PRs | Reverted | Reverted rate | Fix follow-up | Fix follow-up rate |
 |---|---:|---:|---:|---:|---:|
@@ -109,3 +115,17 @@ No signal fires on 0% or 100% of PRs in any repository (see `REPORT.md`). The
 The `agent` signal ranges from 1.1% (pydantic/pydantic, whose sample reaches
 back several years) to 35.9% (home-assistant/core, last weeks only), so the
 three samples cover different periods and are not comparable on that signal.
+
+## Score 0 and agent share
+
+Printed by `derive_numbers.py` from the same `rows.jsonl` files:
+
+| Repo | Rows | Agent-authored rows | Score 0 rows | Reverted among score 0 |
+|---|---:|---:|---:|---:|
+| pydantic/pydantic | 2971 | 39 (1.3%) | 691 (23.3%) | 4 |
+| home-assistant/core | 1386 | 498 (35.9%) | 67 (4.8%) | 0 |
+| vercel/next.js | 2704 | 569 (21.0%) | 569 (21.0%) | 5 |
+
+A score of 0 includes every PR that changes only documentation, generated files
+or lockfiles: those PRs are not scored at all (see the README, Limits). Not every
+score 0 is such a PR; the split was not measured.

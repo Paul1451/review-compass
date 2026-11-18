@@ -16,18 +16,32 @@ predictor:
   (home-assistant/core) and 0.537 (vercel/next.js). 0.5 is chance.
 - The high bucket does not have a higher revert rate than the medium bucket in
   any of the three repositories.
-- Reverts found by hand that the labelling rules missed were added in a
-  sensitivity check. It does not change the picture (AUC 0.445, 0.709, 0.566).
-- The only visible pattern is in vercel/next.js: fix follow-up rate and median
-  hours to merge rise from the low to the high bucket. The hand check shows
-  that the fix follow-up label there is mostly test or CI repairs and
-  coincidental references, so this is not evidence of risk either.
+- Reverts found in the label check that the labelling rules missed were added
+  in a sensitivity check. It does not change the conclusion (AUC 0.445, 0.709,
+  0.566; the home-assistant/core value rests on 2 reverted pull
+  requests).
+- The visible patterns are weak and none is about reverts. In vercel/next.js
+  the fix follow-up rate and the median hours to merge rise from the low to the
+  high bucket, but the label check shows that the fix follow-up label there is
+  mostly test or CI repairs and coincidental references. The score has a weak
+  positive rank correlation with review threads (0.162, 0.119, 0.187), but the
+  median thread count is 0 in nearly every bucket, so that says little. The
+  share of pull requests with a changes-requested review is higher in the high
+  bucket than in the low bucket in all three repositories (see
+  [Results](#results)).
 
 The data does not show that this score predicts reverts. What the tool is
 therefore: a transparent, deterministic reading-order and triage aid whose
 reasons are visible in every comment. It is not a validated risk predictor, and
 its auto-approval option (off by default) should stay off. Details, tables and
 limits are in [Backtest](#backtest).
+
+The scoring rules are unchanged since the git tag `weights-v1`, which was set
+before the first full backtest run. Later commits only touch approval logic,
+reporting and documentation, so the published numbers still describe the code.
+
+Status: the action has been tested against mocked GitHub API responses and
+throwaway git repositories, not yet in a live GitHub Actions run.
 
 ## Contents
 
@@ -60,33 +74,39 @@ measures; see above for the outcome.
 
 ## Example comment
 
-This is the format of a real rendered comment. The content comes from a test
-fixture, not from a real pull request.
+This is the unmodified output of `review-compass score --no-llm` on a small
+throwaway repository (Python files, one change to an `auth` path, source
+changes without tests, one importer of the changed module, one documentation
+file). It is not from a real pull request.
 
 ````markdown
 <!-- review-compass -->
-## Review Compass: HIGH (72/100)
+## Review Compass: HIGH (66/100)
 
 **Why**
-- touches sensitive path: auth/session.py (+25)
+- touches sensitive path: src/auth/session.py (+25)
 - source changed, no test changes (+18)
+- 60 lines changed (+8)
+- author has not changed 100% of these files before (+8)
+- 1 files depend on changed modules (+5)
+- hotspot: src/api/login.py changed 1x in 90 days (+1)
+- spans 2 directories (+1)
 
 **Intent check**
-Issue \#31 asks for a logout fix. This PR also changes token lifetime.
+not run (no API key)
 
 **Read first**
-1. `auth/session.py:88-140` — session invalidation rewritten
-2. `api/login.py:12-30` — caller of changed function
+1. `src/auth/session.py:37-67`
+2. `src/api/login.py:6-9`
 
-**Skim (9 files)**
-`d1.md`, `d2.md`, `d3.md`, `d4.md`, `d5.md`, `d6.md`, `d7.md`, `d8.md`, …and 1 more
-
-<sub>Notes: dependents: not measured (unsupported language)</sub>
+**Skim (1 file)**
+`docs/guide.md`
 ````
 
 Without an Anthropic API key the "Intent check" section reads
-`not run (no API key)` and everything else is unchanged. The action also sets
-one label per pull request: `review:low`, `review:medium` or `review:high`.
+`not run (no API key)`, as above. The intent check and the short "why" notes
+next to files in the reading list need a key. The action also sets one label
+per pull request: `review:low`, `review:medium` or `review:high`.
 
 ## Install
 
@@ -97,7 +117,7 @@ name: Review Compass
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -112,7 +132,7 @@ jobs:
   review-compass:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - uses: Paul1451/review-compass@main
@@ -130,17 +150,31 @@ Notes:
   to post the comment, set the label and submit a review, and `issues: read`
   to read linked issues (closing keywords such as `fixes #12` in the pull
   request body).
-- The concurrency group cancels a running job when a new push arrives.
-- Pin the action to a commit SHA (`Paul1451/review-compass@<full-sha>`)
-  instead of `@main`. The action runs with a token that can write to pull
-  requests, so a moving branch is a supply-chain risk.
+- The concurrency group cancels a running job when a new push arrives. The
+  `edited` trigger re-runs the check when a pull request is retargeted to
+  another base branch.
+- What is pinned: the action installs Review Compass and its Python
+  dependencies from the committed `uv.lock` (`uv sync --locked`), so they do
+  not change between runs, and `astral-sh/setup-uv` is pinned by commit SHA in
+  `action.yml`. What is not: the version of `uv` itself, and
+  `Paul1451/review-compass@main` in the snippet above, which is a moving
+  branch. The action runs with a token that can write to pull requests, so use
+  a commit SHA (`Paul1451/review-compass@<full-sha>`) instead of `@main`, and
+  pin `actions/checkout` by SHA as shown.
 - Inputs: `anthropic-api-key` (optional), `github-token` (default
   `github.token`), `bot-login` (login of the account that posts, default
   `github-actions[bot]`; needed when a different token identity is used).
+  On GitHub Enterprise Server the action uses the `GITHUB_API_URL` that the
+  runner sets and sends the token to that host only.
 - Pull requests from forks get no comment and no label, because their token
   cannot write. The brief goes to the job log and the step summary only.
 - Draft pull requests are skipped unless `skip_drafts: false` is set in the
   policy file.
+- Pull requests created with the default `GITHUB_TOKEN` do not trigger
+  `pull_request` workflows at all, so agents that open pull requests that way
+  get no comment.
+- Labels are created on first use and get GitHub's default colour unless you
+  create `review:low`, `review:medium` and `review:high` beforehand.
 
 ## Policy file (`.review-compass.yml`)
 
@@ -185,6 +219,10 @@ Sensitive paths:
 - Guard paths `.review-compass.yml` and `.github/workflows/**` are always
   sensitive and cannot be turned off.
 
+Label names are fixed (`review:low`, `review:medium`, `review:high`) and not
+configurable in this version. `llm.max_input_tokens` is approximate: the
+message to the model is cut to 4 characters per token.
+
 ## Local use
 
 Score a revision range in a local checkout without GitHub:
@@ -195,35 +233,40 @@ uvx --from git+https://github.com/Paul1451/review-compass \
 ```
 
 Add `--json` for the machine-readable result and `--repo-dir PATH` to point at
-another checkout. The policy is read from the `--base` revision. If
-`ANTHROPIC_API_KEY` is set in your shell, the intent check runs and the diff of
-the top-ranked files is sent to the Anthropic API; unset the variable to keep
-everything local.
+another checkout. The policy is read from the `--base` revision. Use
+`--no-llm` to be sure nothing leaves your machine: without it, if
+`ANTHROPIC_API_KEY` is set in your shell, the reading-list notes are generated
+by the model and the diff of the top-ranked files is sent to the Anthropic API.
+(The intent check does not run locally, because there is no linked issue.)
 
 ## How the score works
 
 The score is a capped sum of eight signals. Each signal contributes
 `weight x fraction`, rounded half up to whole points; signals with 0 points are
 not listed. The weights are hand-set priors, not fitted to data. Pull requests
-that change only documentation score 0.
+that change only documentation, generated files or lockfiles are not scored:
+they get 0 points and the note "only documentation, generated files or
+lockfiles" (see [Limits](#limits)).
 
 | Signal | Weight | Fraction (0 to 1) | Reason shown |
 |---|---:|---|---|
-| `sensitive_path` | 25 | 1 if any changed file matches a sensitive path | touches sensitive path: ... |
+| `sensitive_path` | 25 | 1 if any changed file matches a sensitive path | touches sensitive path: <path> (+N more) |
 | `no_tests` | 18 | 1 if source changed and no test file changed | source changed, no test changes |
 | `dependents` | 15 | floor(log2(1 + n)) / 3, n = files that import the changed modules | n files depend on changed modules |
 | `size` | 15 | log2(1 + lines / 10) / 5, lines = added and removed in source and config files | n lines changed |
-| `hotspot` | 9 | busiest changed source file: commits in the last 90 days / 9 | hotspot: file changed n times in 90 days |
+| `hotspot` | 9 | busiest changed source file: commits in the last 90 days / 9 | hotspot: <path> changed Nx in 90 days |
 | `unfamiliar` | 8 | share of changed existing source files the author has not touched before | author has not changed n% of these files before |
-| `spread` | 5 | (directories touched - 1) / 5 | spans n directories |
+| `spread` | 5 | (directories with changed source or config files - 1) / 5 | spans n directories |
 | `agent` | 5 | 1 if the pull request looks agent-authored | authored by agent (evidence) |
 
 Fractions are capped at 1 and the total at 100. Buckets: `low` below 35,
 `medium` from 35, `high` from 60 (thresholds are configurable).
 
 Agent authorship is detected from a `Co-Authored-By` trailer naming a known
-agent with a matching address, a "Generated with Claude Code" marker in the
-body, a bot author, or a branch prefix such as `claude/`. It is a heuristic.
+agent with a matching address, the exact text `Generated with [Claude Code]`
+in the body, a bot account whose login names a known agent (an ordinary bot
+such as dependabot does not count), or a branch prefix of one of nine known
+agents (for example `claude/`). It is a heuristic.
 
 Dependents are measured for Python and JavaScript/TypeScript files
 (`.py`, `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`, `.mts`, `.cts`). For
@@ -246,17 +289,40 @@ hold:
 - it is not a draft,
 - the bucket is `low`,
 - no changed file is sensitive and no guard path is touched,
+- no changed path (new or old) is under `.github/` or is a `CODEOWNERS` file,
+- no changed file is a lockfile or generated, and no file counted as
+  documentation has a code extension (`docs/conf.py`, scripts),
 - the comment and label were written without error, and
 - the head commit is still the one that was scored.
 
-The decision uses only the deterministic bucket. When a pull request stops
-being eligible, the action dismisses its own earlier approval. The
-repository setting "Allow GitHub Actions to create and approve pull requests"
-(Settings, Actions, General) must be enabled for the approval to go through.
+The decision uses only the deterministic bucket. Every run that does not end in
+a fresh approval (a git error, an invalid policy, a draft, a failed write, a
+changed head, an unexpected error) dismisses the action's own earlier approval
+on a best-effort basis; if the dismissal fails, the job fails and says so.
+The repository setting "Allow GitHub Actions to create and approve pull
+requests" (Settings, Actions, General) must be enabled for the approval to go
+through.
 
-Enable it only where every person with push access to pull request branches
-is trusted, because the bucket can be influenced by what a branch author
-changes.
+**Required branch protection.** Turn on "Dismiss stale pull request approvals
+when new commits are pushed" (or "Require approval of the most recent
+reviewable push"). Between a push and the end of the next run an earlier
+approval still counts, and a run can fail or be cancelled; only the branch
+protection setting closes that gap.
+
+**What a branch author controls.** Enable auto-approval only where every
+person with push access to pull request branches is trusted:
+
+- For pull requests from the same repository GitHub runs the workflow file from
+  the pull request. A branch author can rewrite or delete the job, or approve
+  with the token directly. The guard paths only stop Review Compass from
+  approving such a pull request; they do not stop the pull request. Require
+  code owner review for `.github/**` (a `CODEOWNERS` entry) where
+  auto-approval is used.
+- The policy is read from the base commit of the base branch the pull request
+  names. The `edited` trigger re-runs the check when the base branch is
+  changed, but a pull request opened against a branch with a permissive policy
+  is judged by that policy until then.
+- The bucket can be influenced by what a branch author changes.
 
 ## Backtest
 
@@ -266,16 +332,22 @@ changes.
 - The same built-in default policy for every repository, no `.review-compass.yml`
   of its own, no LLM. Policy fingerprint `eea628015697`.
 - The defaults were frozen as git tag `weights-v1` before the first full run.
-  They were not tuned on the results.
-- The 3000 most recent merged pull requests were requested per repository.
-  Pull requests merged less than 14 days before the run were not evaluated,
-  and a few without a head commit were skipped.
+  They were not tuned on the results. The scoring rules are unchanged since
+  that tag; later commits only touch approval logic, reporting and
+  documentation.
+- The 3000 most recently created merged pull requests were requested per
+  repository, whatever their base branch (release-branch pull requests are
+  rows in vercel/next.js). Pull requests merged less than 14 days before the
+  run were not evaluated, and a few without a head commit were skipped.
 - Outcome window: 14 days after merge.
   - `reverted`: a later pull request or commit reverts it (title
     `Revert "<title>"`, `Reverts #N` in the body, or `This reverts commit <sha>`).
   - `fix_followup`: reverted, or a later non-bot pull request with a title
-    containing fix, hotfix or regression references it by number.
-- Each pull request is scored as it was at merge time, from git history only.
+    containing fix, fixes, fixed, hotfix or regression references it by
+    number. Follow-ups that are backports or cherry-picks, and ones naming
+    more than 5 pull requests, are excluded.
+- Each pull request is scored as it was at its merge base (the commit it
+  branched from), from git history only.
 
 The full report is [`backtest/REPORT.md`](backtest/REPORT.md); the per-pull-request
 rows are in `backtest/<owner>__<repo>/rows.jsonl`.
@@ -288,13 +360,15 @@ Share is the share of evaluated pull requests; CI is a 95 % confidence interval.
 
 2971 evaluated PRs, 1 skipped (no head).
 
-| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) | Median review threads | Median hours to merge |
-|---|---:|---:|---|---|---:|---:|
-| low | 1924 | 64.8% | 0.4% (0.2% to 0.8%) | 0.7% (0.4% to 1.2%) | 0.0 | 6.5 |
-| medium | 815 | 27.4% | 0.5% (0.2% to 1.3%) | 0.6% (0.3% to 1.4%) | 0.0 | 8.1 |
-| high | 232 | 7.8% | 0.0% (0.0% to 1.6%) | 0.0% (0.0% to 1.6%) | 0.0 | 7.4 |
+| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) | Median review threads | Median hours to merge | Changes requested |
+|---|---:|---:|---|---|---:|---:|---:|
+| low | 1924 | 64.8% | 0.4% (0.2% to 0.8%) | 0.7% (0.4% to 1.2%) | 0.0 | 6.5 | 6.6% |
+| medium | 815 | 27.4% | 0.5% (0.2% to 1.3%) | 0.6% (0.3% to 1.4%) | 0.0 | 8.1 | 7.2% |
+| high | 232 | 7.8% | 0.0% (0.0% to 1.6%) | 0.0% (0.0% to 1.6%) | 0.0 | 7.4 | 8.2% |
 
 Skimming low-risk PRs would cover 64.8% of PRs and contain 8 of 12 reverted PRs.
+
+Reverted rate, high bucket divided by low bucket: 0.00x
 
 - AUC, score vs reverted: 0.461
 - AUC, score vs fix follow-up: 0.471
@@ -304,13 +378,15 @@ Skimming low-risk PRs would cover 64.8% of PRs and contain 8 of 12 reverted PRs.
 
 1386 evaluated PRs, 0 skipped (no head).
 
-| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) | Median review threads | Median hours to merge |
-|---|---:|---:|---|---|---:|---:|
-| low | 1030 | 74.3% | 0.1% (0.0% to 0.5%) | 1.0% (0.5% to 1.8%) | 0.0 | 3.7 |
-| medium | 330 | 23.8% | 0.0% (0.0% to 1.2%) | 1.2% (0.5% to 3.1%) | 0.0 | 2.2 |
-| high | 26 | 1.9% | 0.0% (0.0% to 12.9%) | 0.0% (0.0% to 12.9%) | 0.5 | 3.0 |
+| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) | Median review threads | Median hours to merge | Changes requested |
+|---|---:|---:|---|---|---:|---:|---:|
+| low | 1030 | 74.3% | 0.1% (0.0% to 0.5%) | 1.0% (0.5% to 1.8%) | 0.0 | 3.7 | 4.3% |
+| medium | 330 | 23.8% | 0.0% (0.0% to 1.2%) | 1.2% (0.5% to 3.1%) | 0.0 | 2.2 | 5.2% |
+| high | 26 | 1.9% | 0.0% (0.0% to 12.9%) | 0.0% (0.0% to 12.9%) | 0.5 | 3.0 | 19.2% |
 
 Skimming low-risk PRs would cover 74.3% of PRs and contain 1 of 1 reverted PRs.
+
+Reverted rate, high bucket divided by low bucket: 0.00x
 
 - AUC, score vs reverted: 0.581
 - AUC, score vs fix follow-up: 0.533
@@ -320,13 +396,15 @@ Skimming low-risk PRs would cover 74.3% of PRs and contain 1 of 1 reverted PRs.
 
 2704 evaluated PRs, 13 skipped (no head).
 
-| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) | Median review threads | Median hours to merge |
-|---|---:|---:|---|---|---:|---:|
-| low | 1474 | 54.5% | 0.9% (0.6% to 1.6%) | 2.3% (1.7% to 3.2%) | 0.0 | 18.2 |
-| medium | 943 | 34.9% | 1.6% (1.0% to 2.6%) | 3.9% (2.9% to 5.4%) | 0.0 | 33.9 |
-| high | 287 | 10.6% | 1.0% (0.4% to 3.0%) | 4.2% (2.4% to 7.2%) | 0.0 | 45.7 |
+| Bucket | PRs | Share | Reverted (95% CI) | Fix follow-up (95% CI) | Median review threads | Median hours to merge | Changes requested |
+|---|---:|---:|---|---|---:|---:|---:|
+| low | 1474 | 54.5% | 0.9% (0.6% to 1.6%) | 2.3% (1.7% to 3.2%) | 0.0 | 18.2 | 1.5% |
+| medium | 943 | 34.9% | 1.6% (1.0% to 2.6%) | 3.9% (2.9% to 5.4%) | 0.0 | 33.9 | 1.4% |
+| high | 287 | 10.6% | 1.0% (0.4% to 3.0%) | 4.2% (2.4% to 7.2%) | 0.0 | 45.7 | 3.5% |
 
 Skimming low-risk PRs would cover 54.5% of PRs and contain 14 of 32 reverted PRs.
+
+Reverted rate, high bucket divided by low bucket: 1.10x
 
 - AUC, score vs reverted: 0.537
 - AUC, score vs fix follow-up: 0.583
@@ -334,15 +412,25 @@ Skimming low-risk PRs would cover 54.5% of PRs and contain 14 of 32 reverted PRs
 
 Reading the tables: in none of the three repositories does the high bucket
 revert more often than the medium bucket, and the intervals overlap almost
-everywhere. In home-assistant/core the high bucket has 26 pull requests and no
+everywhere. The ratio of the high-bucket revert rate to the low-bucket revert
+rate is 0.00x in pydantic/pydantic (no revert in the high bucket), 0.00x in
+home-assistant/core and 1.10x in vercel/next.js; 1.0x would mean no
+difference. In home-assistant/core the high bucket has 26 pull requests and no
 reverts, which says little. In vercel/next.js the fix follow-up rate and the
 median hours to merge rise with the bucket (2.3%, 3.9%, 4.2% and 18.2, 33.9,
-45.7 hours), but see the hand check below: that label is not a reliable sign
-of defects. Skimming the low bucket would have skipped 14 of the 32 reverted
-pull requests in vercel/next.js and 8 of 12 in pydantic/pydantic, roughly in
-proportion to the low bucket's share of all pull requests.
+45.7 hours), but see the label check below: that label is not a reliable sign
+of defects. The share of pull requests with a changes-requested review rises
+from the low to the high bucket in all three repositories (6.6% to 8.2%, 4.3%
+to 19.2% on 26 pull requests, 1.5% to 3.5%), a weak pattern that is not an
+outcome of the kind the backtest was built to test. Skimming the low bucket
+would have skipped 14 of the 32 reverted pull requests in vercel/next.js and 8
+of 12 in pydantic/pydantic, roughly in proportion to the low bucket's share of
+all pull requests.
 
-Pooled over all three repositories (7061 evaluated PRs):
+Pooled over all three repositories (7061 evaluated PRs); this table and the
+sensitivity table below are printed by
+[`backtest/derive_numbers.py`](backtest/derive_numbers.py), which reads the
+`rows.jsonl` files:
 
 | Bucket | PRs | Reverted | Reverted rate | Fix follow-up | Fix follow-up rate |
 |---|---:|---:|---:|---:|---:|
@@ -354,10 +442,12 @@ Pooled over all three repositories (7061 evaluated PRs):
 agent-authored pull requests. The `size` signal fires on 75.2% to 91.6% of
 pull requests and so separates little.
 
-### Hand check
+### Label check
 
-The labels were checked by eye against commit history and GitHub
-([`backtest/HANDCHECK.md`](backtest/HANDCHECK.md)). All labelled pull requests
+The labels were checked by an AI assistant (Claude, run by the author) reading
+commit history and pull request pages on 2026-11-18. The check was not
+independently verified by a person. The write-up is
+[`backtest/LABEL_CHECK.md`](backtest/LABEL_CHECK.md). All labelled pull requests
 were checked in pydantic/pydantic and home-assistant/core; in vercel/next.js a
 sample fixed in advance (every 3rd `reverted`, every 5th fix-follow-up-only
 label).
@@ -406,7 +496,9 @@ in `--cache-dir` (default `.cache`), and writes `report.json` and `rows.jsonl`
 per repository. `report` rebuilds `REPORT.md` from the `report.json` files. A
 run takes a long time and many API requests on large repositories. Results
 change with the date of the run, because the pull requests are the most recent
-ones. `--policy FILE` replays a different policy file.
+ones. `--policy FILE` replays a different policy file. The cached clone is
+only brought up to date on its default branch; for a clean rerun delete the
+cache directory first.
 
 ## Limits
 
@@ -417,45 +509,53 @@ ones. `--policy FILE` replays a different policy file.
   (survivorship).
 - No causal claim. A bucket correlating with an outcome would not show that
   review effort at that bucket changes the outcome.
-- Revert detection is incomplete. The hand check found reverts the rules
+- Revert detection is incomplete. The label check found reverts the rules
   missed in all three repositories (see above).
 - Fix follow-up detection is fuzzy: it matches titles and references, and the
-  hand check found it mostly picks up test and CI repairs and coincidental
+  label check found it mostly picks up test and CI repairs and coincidental
   mentions, not production bugs.
 - The three samples cover different time spans. pydantic/pydantic reaches back
-  several years, home-assistant/core only a few weeks. The share of
-  agent-authored pull requests ranges from 1.1% to 35.9%, so the samples are
-  not comparable on that signal.
+  several years, home-assistant/core only a recent window of a few weeks. The
+  share of agent-authored pull requests in the rows is 1.3% (pydantic/pydantic),
+  35.9% (home-assistant/core) and 21.0% (vercel/next.js), so the samples are not
+  comparable on that signal.
+- Classification is by path name. Known lockfile names (`package-lock.json`,
+  `uv.lock`, ...), anything under a `dist`, `build`, `vendor` or `node_modules`
+  directory, minified, protobuf and snapshot files (`*.min.js`, `*_pb2.py`,
+  `*.snap`, `*.generated.*`), images, fonts, archives and other binaries
+  (including `.jar`, `.zip`, `.gz`, `.tar`, `.bin`), and everything under a
+  top-level `docs/` directory is treated as lockfile, generated or
+  documentation, whatever it contains. A pull request that changes only such
+  paths scores 0, whatever its size and even if the path would otherwise be
+  sensitive. Auto-approval is blocked for lockfile and generated changes and
+  for code files under `docs/`, but the comment itself still reads
+  `LOW (0/100)`. In the backtest 23.3% of the pydantic/pydantic rows and 21.0%
+  of the vercel/next.js rows have score 0 (not all of them for this reason; see
+  [`backtest/LABEL_CHECK.md`](backtest/LABEL_CHECK.md)); 4 of 691 and 5 of 569
+  of those were reverted. Future work: treat lockfiles as dependency manifests
+  and stop zeroing generated and vendored code. That changes scores, so it
+  needs a new weights version and a fresh backtest.
 - The built-in sensitive paths are generic. They do not know your repository;
   extend them with `sensitive_paths`.
 - Python import resolution matches module suffixes and can count too many
-  dependents when module names repeat across packages.
+  dependents when module names repeat across packages. For JavaScript and
+  TypeScript only relative imports (`./x`, `../x`) are followed; path aliases,
+  workspace packages and bare specifiers are not counted, so dependents are
+  undercounted in monorepos.
+- The dependents count also includes importers of changed non-source files
+  (tests, documentation scripts, vendored code) once any changed source file is
+  supported.
+- `no_tests` treats a pull request that only deletes a test file as having
+  changed tests, so source changes that delete their tests do not get that
+  signal.
+- `unfamiliar` compares commit e-mail addresses. In repositories that squash
+  merge, the address on the default branch can differ from the one on the
+  branch commits, so the signal fires more often than it should (24% to 43% of
+  pull requests in the report).
 - The weights are hand-set priors, not fitted. They were frozen before the
   first run and not tuned afterwards, which is also why they are not good.
 - Dependents are not measured for languages other than Python and
   JavaScript/TypeScript.
-
-## Security notes
-
-- The policy is read from the base commit only. A pull request cannot change
-  the rules that score it.
-- `.review-compass.yml` and `.github/workflows/**` are guard paths: always
-  sensitive, cannot be disabled, always block auto-approval.
-- The workflow uses `pull_request`. `pull_request_target` is never used.
-- Code from the pull request is never executed. It is only read through git,
-  with argument lists and no shell strings.
-- Model output is text only. It fills the intent check and the reading-list
-  notes and cannot change the score, the bucket or the approval decision.
-- Text from pull requests (titles, bodies, issues, diffs, file names) is
-  untrusted. It is escaped in the comment, and passed to the model inside
-  delimited blocks with an instruction to treat it as data.
-- Fork pull requests are never auto-approved and get no comment or label.
-- Without `ANTHROPIC_API_KEY` no code leaves the runner. With a key, the pull
-  request title, body (first 4000 characters), linked issues, the paths of the
-  five top-ranked files and their diff (truncated to `llm.max_input_tokens`)
-  are sent to the Anthropic API.
-  Set `llm.enabled: false` in the policy file to prevent this even when a
-  key is present.
 
 ## License
 
