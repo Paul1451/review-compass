@@ -13,7 +13,7 @@ from pathlib import Path
 
 from review_compass.backtest.history import _check_repo
 from review_compass.backtest.metrics import RepoReport, run_backtest
-from review_compass.backtest.report import write_reports
+from review_compass.backtest.report import is_valid_report, write_reports
 from review_compass.brief import AnthropicBriefClient, BriefClient
 from review_compass.github import GitHubClient
 from review_compass.gitrepo import GitError, GitRepo
@@ -135,29 +135,43 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
         print("No GitHub token: set GITHUB_TOKEN or log in with gh", file=sys.stderr)
         return 2
     now = datetime.now(UTC)
-    reports = [
-        run_backtest(
-            repo,
-            args.limit,
-            Path(args.out),
-            Path(args.cache_dir),
-            policy,
-            GitHubClient(token, repo),
-            now,
-        )
-        for repo in args.repos
-    ]
-    write_reports(reports, Path(args.out))
-    return 0
+    out_dir = Path(args.out)
+    reports: list[RepoReport] = []
+    failed = False
+    for repo in args.repos:
+        try:
+            reports.append(
+                run_backtest(
+                    repo,
+                    args.limit,
+                    out_dir,
+                    Path(args.cache_dir),
+                    policy,
+                    GitHubClient(token, repo),
+                    now,
+                )
+            )
+        except Exception as exc:
+            print(
+                f"review-compass: backtest failed for {repo} ({type(exc).__name__})",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        write_reports(reports, out_dir)  # keep REPORT.md current for long multi-repo runs
+    return 1 if failed else 0
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
     try:
-        reports = [
-            RepoReport.model_validate_json(path.read_text(encoding="utf-8"))
-            for path in sorted(out_dir.glob("*/report.json"))
-        ]
+        reports = []
+        for path in sorted(out_dir.glob("*/report.json")):
+            report = RepoReport.model_validate_json(path.read_text(encoding="utf-8"))
+            if is_valid_report(report):
+                reports.append(report)
+            else:
+                print(f"review-compass: ignoring invalid report {path}", file=sys.stderr)
         if not reports:
             print(f"review-compass: no report.json files under {out_dir}", file=sys.stderr)
             return 2

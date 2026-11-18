@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from review_compass.backtest.metrics import Row
+from review_compass.backtest.outcomes import Outcome
 from review_compass.gitrepo import GitRepo
+from review_compass.models import Bucket
 
 
 class RepoBuilder:
@@ -100,3 +103,31 @@ def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test may see credentials or Actions variables from the developer's shell."""
     for name in _ISOLATED_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+def row(
+    score: int,
+    bucket: Bucket,
+    *,
+    reverted: bool = False,
+    fix_followup: bool = False,
+    agent: bool = False,
+    signals: dict[str, int] | None = None,
+    threads: int = 0,
+    hours: float = 1.0,
+) -> Row:
+    return Row(
+        repo="o/r",
+        number=1,
+        score=score,
+        bucket=bucket,
+        agent_authored=agent,
+        signals=signals or {},
+        outcome=Outcome(
+            reverted=reverted,
+            fix_followup=fix_followup or reverted,
+            review_threads=threads,
+            changes_requested=0,
+            hours_to_merge=hours,
+        ),
+    )

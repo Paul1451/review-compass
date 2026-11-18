@@ -4,12 +4,14 @@ import json
 import re
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import RepoBuilder
 
 from review_compass import cli
+from review_compass.backtest.metrics import RepoReport
 from review_compass.live import LiveResult
 
 
@@ -248,3 +250,76 @@ def test_report_rebuilds_markdown_from_json(tmp_path: Path) -> None:
     assert cli.main(["report", str(tmp_path)]) == 0
     assert "## o/r" in (tmp_path / "REPORT.md").read_text()
     assert cli.main(["report", str(tmp_path / "missing")]) == 2
+
+
+def _fake_reports(monkeypatch: pytest.MonkeyPatch, failing: set[str]) -> None:
+    from review_compass.backtest.metrics import compute_report
+    from review_compass.policy import load_policy
+
+    def fake_run(
+        repo: str,
+        limit: int,
+        out_dir: Path,
+        cache: Path,
+        policy: object,
+        gh: object,
+        now: datetime,
+        **kw: object,
+    ) -> RepoReport:
+        if repo in failing:
+            raise RuntimeError("secret detail")
+        report = compute_report(repo, [], 0, load_policy(None), now)
+        slug = repo.replace("/", "__")
+        (out_dir / slug).mkdir(parents=True, exist_ok=True)
+        (out_dir / slug / "report.json").write_text(report.model_dump_json())
+        return report
+
+    monkeypatch.setattr(cli, "_github_token", lambda: "t")
+    monkeypatch.setattr(cli, "run_backtest", fake_run)
+
+
+def test_backtest_failure_keeps_other_repos_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_reports(monkeypatch, {"a/b"})
+    out = tmp_path / "out"
+    assert cli.main(["backtest", "a/b", "c/d", "--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "review-compass: backtest failed for a/b (RuntimeError)" in err
+    assert "secret detail" not in err
+    text = (out / "REPORT.md").read_text()
+    assert "## c/d" in text and "## a/b" not in text
+
+
+def test_report_is_rewritten_after_each_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_reports(monkeypatch, {"c/d"})
+    out = tmp_path / "out"
+    assert cli.main(["backtest", "a/b", "c/d", "--out", str(out)]) == 1
+    assert "## a/b" in (out / "REPORT.md").read_text()
+
+
+def test_report_command_skips_invalid_reports(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from review_compass.backtest.metrics import compute_report
+    from review_compass.policy import load_policy
+
+    good = compute_report("o/r", [], 0, load_policy(None), datetime(2026, 3, 1, tzinfo=UTC))
+    variants = {
+        "good": good,
+        "fp": good.model_copy(update={"policy_fingerprint": "# injected"}),
+        "ver": good.model_copy(update={"tool_version": "1.0\n# x"}),
+        "sig": good.model_copy(update={"signal_fire_rate": {"evil|signal": 0.5}}),
+        "agent": good.model_copy(update={"agent": good.model_copy(update={"tool_version": "a b"})}),
+    }
+    for name, rep in variants.items():
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "report.json").write_text(rep.model_dump_json())
+    assert cli.main(["report", str(tmp_path)]) == 0
+    err = capsys.readouterr().err
+    for name in ("fp", "ver", "sig", "agent"):
+        assert f"review-compass: ignoring invalid report {tmp_path / name / 'report.json'}" in err
+    text = (tmp_path / "REPORT.md").read_text()
+    assert text.count("## o/r") == 1

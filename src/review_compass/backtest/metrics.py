@@ -232,12 +232,26 @@ class _Scored(BaseModel):
 
 
 def _load_scored(path: Path, header: dict[str, str]) -> dict[int, _Scored] | None:
-    """Scored PRs of a resumable file; None when absent, unreadable or for another policy."""
+    """Scored PRs of a resumable file; None when absent, unreadable or for another policy.
+
+    A bad final line (a crash mid-write) is dropped and the file is rewritten without it; a
+    bad line anywhere else means the file cannot be trusted.
+    """
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
         if not lines or json.loads(lines[0]) != header:
             return None
-        scored = [_Scored.model_validate_json(line) for line in lines[1:]]
+        scored: list[_Scored] = []
+        for position, line in enumerate(lines[1:], start=1):
+            try:
+                scored.append(_Scored.model_validate_json(line))
+            except ValueError:
+                if position != len(lines) - 1:
+                    return None
+        if len(scored) != len(lines) - 1 or not text.endswith("\n"):
+            body = "".join(s.model_dump_json() + "\n" for s in scored)
+            path.write_text(json.dumps(header) + "\n" + body, encoding="utf-8")
     except (OSError, ValueError):
         return None
     return {s.number: s for s in scored}

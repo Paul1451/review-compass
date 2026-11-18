@@ -1,15 +1,25 @@
 """REPORT.md rendering. Built only from report numbers and validated repository names."""
 
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
 from review_compass.backtest.history import _check_repo
 from review_compass.backtest.metrics import BucketStats, RepoReport
+from review_compass.policy import Weights
+
+
+def fmt(x: float, digits: int) -> str:
+    """Fixed-point text, rounded half up on the last digit (never Python's half-even)."""
+    scaled = int(abs(x) * 10**digits + 0.5 + 1e-9)
+    sign = "-" if x < 0 and scaled else ""
+    whole, frac = divmod(scaled, 10**digits)
+    return f"{sign}{whole}.{frac:0{digits}d}" if digits else f"{sign}{whole}"
 
 
 def pct(x: float) -> str:
     """Fraction as a percentage with one decimal, half up on tenths."""
-    return f"{int(x * 1000 + 0.5) / 10:.1f}%"
+    return f"{fmt(x * 100, 1)}%"
 
 
 def _rate_ci(rate: float, ci: tuple[float, float]) -> str:
@@ -17,14 +27,32 @@ def _rate_ci(rate: float, ci: tuple[float, float]) -> str:
 
 
 def _num(x: float | None) -> str:
-    return "n/a" if x is None else f"{x:.3f}"
+    return "n/a" if x is None else fmt(x, 3)
+
+
+_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{12}$")
+_VERSION_RE = re.compile(r"^[0-9A-Za-z.+-]{1,40}$")
+
+
+def is_valid_report(report: RepoReport) -> bool:
+    """Strings that reach REPORT.md from disk must have the shape this tool writes."""
+    for r in (report, report.agent):
+        if r is None:
+            continue
+        if not _FINGERPRINT_RE.fullmatch(r.policy_fingerprint):
+            return False
+        if not _VERSION_RE.fullmatch(r.tool_version):
+            return False
+        if not set(r.signal_fire_rate) <= set(Weights.model_fields):
+            return False
+    return True
 
 
 def _row(b: BucketStats) -> str:
     return (
         f"| {b.bucket} | {b.n} | {pct(b.share)} | {_rate_ci(b.reverted_rate, b.reverted_ci)} "
         f"| {_rate_ci(b.fix_followup_rate, b.fix_followup_ci)} "
-        f"| {b.median_review_threads:.1f} | {b.median_hours_to_merge:.1f} |"
+        f"| {fmt(b.median_review_threads, 1)} | {fmt(b.median_hours_to_merge, 1)} |"
     )
 
 

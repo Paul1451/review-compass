@@ -2,10 +2,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from test_metrics import row
+from conftest import row
 
 from review_compass.backtest.metrics import RepoReport, compute_report
-from review_compass.backtest.report import pct, write_reports
+from review_compass.backtest.report import fmt, pct, write_reports
 from review_compass.policy import load_policy
 
 NOW = datetime(2026, 3, 1, tzinfo=UTC)
@@ -42,3 +42,15 @@ def test_report_marks_missing_statistics(tmp_path: Path) -> None:
 def test_report_rejects_unsafe_repo_name(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         write_reports([_report("o/r\n# injected")], tmp_path)
+
+
+def test_fmt_is_half_up() -> None:
+    assert fmt(1.25, 1) == "1.3" and fmt(0.0005, 3) == "0.001"
+    assert fmt(-0.9995, 3) == "-1.000" and fmt(60.0, 1) == "60.0"
+    assert fmt(0.0, 3) == "0.000"
+
+
+def test_report_uses_half_up_for_medians(tmp_path: Path) -> None:
+    rows = [row(10, "low", hours=1.25)]
+    write_reports([compute_report("o/r", rows, 0, load_policy(None), NOW)], tmp_path)
+    assert "| 0.0 | 1.3 |" in (tmp_path / "REPORT.md").read_text()

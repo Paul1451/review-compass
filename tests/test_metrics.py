@@ -6,51 +6,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import RepoBuilder
+from conftest import RepoBuilder, row
 
 from review_compass.backtest import metrics
 from review_compass.backtest.metrics import (
     RepoReport,
-    Row,
     auc,
     compute_report,
     run_backtest,
     spearman,
     wilson_interval,
 )
-from review_compass.backtest.outcomes import Outcome
-from review_compass.models import Bucket
 from review_compass.policy import load_policy
 
 NOW = datetime(2026, 3, 1, tzinfo=UTC)
-
-
-def row(
-    score: int,
-    bucket: Bucket,
-    *,
-    reverted: bool = False,
-    fix_followup: bool = False,
-    agent: bool = False,
-    signals: dict[str, int] | None = None,
-    threads: int = 0,
-    hours: float = 1.0,
-) -> Row:
-    return Row(
-        repo="o/r",
-        number=1,
-        score=score,
-        bucket=bucket,
-        agent_authored=agent,
-        signals=signals or {},
-        outcome=Outcome(
-            reverted=reverted,
-            fix_followup=fix_followup or reverted,
-            review_threads=threads,
-            changes_requested=0,
-            hours_to_merge=hours,
-        ),
-    )
 
 
 def test_wilson() -> None:
@@ -259,3 +228,95 @@ def test_resume_skips_scored_prs_and_restarts_on_policy_change(
     scored.write_text("not json\n")
     calls.clear()
     assert run(other).n == 3 and sorted(calls) == [1, 2, 3]
+
+
+def test_outcomes_are_labelled_over_all_fetched_prs(
+    make_repo: Callable[[], RepoBuilder], tmp_path: Path
+) -> None:
+    origin, nodes = _origin(make_repo)
+    # Newest PR, merged inside the last 14 days (not evaluable), reverts evaluable PR 1.
+    revert = _node(5, nodes[0]["baseRefOid"], nodes[0]["headRefOid"])
+    revert["title"] = 'Revert "Add feature 1"'
+    revert["createdAt"] = "2026-01-10T00:00:00Z"
+    revert["mergedAt"] = "2026-02-25T00:00:00Z"
+    out = tmp_path / "out"
+    report = run_backtest(
+        "o/r", 10, out, tmp_path / "c", load_policy(None), FakeGH([revert, *nodes]), NOW,
+        clone_url=str(origin.path),
+    )  # fmt: skip
+    assert report.n == 3 and report.reverted_total == 1
+    rows = [json.loads(x) for x in (out / "o__r" / "rows.jsonl").read_text().splitlines()]
+    assert {r["number"]: r["outcome"]["reverted"] for r in rows} == {1: True, 2: False, 3: False}
+
+
+def _seed(path: Path, policy: Any, items: list[dict[str, Any]], tail: str = "") -> None:
+    from importlib.metadata import version
+
+    header = {"policy_fingerprint": policy.fingerprint(), "tool_version": version("review-compass")}
+    lines = [json.dumps(header), *(json.dumps(i) for i in items)]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n" + tail)
+
+
+def _item(n: int) -> dict[str, Any]:
+    return {"number": n, "score": 7, "bucket": "low", "agent_authored": False, "signals": {}}
+
+
+def _counting(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    calls: list[int] = []
+    real = metrics.extract_features
+
+    def spy(git: Any, meta: Any, *args: Any) -> Any:
+        calls.append(meta.number)
+        return real(git, meta, *args)
+
+    monkeypatch.setattr(metrics, "extract_features", spy)
+    return calls
+
+
+def _run_resume(origin: RepoBuilder, nodes: list[dict[str, Any]], tmp_path: Path) -> RepoReport:
+    return run_backtest(
+        "o/r", 10, tmp_path / "out", tmp_path / "c", load_policy(None), FakeGH(nodes), NOW,
+        clone_url=str(origin.path),
+    )  # fmt: skip
+
+
+def _numbers(tmp_path: Path) -> list[int]:
+    path = tmp_path / "out" / "o__r" / "rows.jsonl"
+    return [json.loads(x)["number"] for x in path.read_text().splitlines()]
+
+
+def test_partial_resume_scores_only_missing_pr(
+    make_repo: Callable[[], RepoBuilder], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, nodes = _origin(make_repo)
+    _seed(tmp_path / "out" / "o__r" / "scored.jsonl", load_policy(None), [_item(1), _item(2)])
+    calls = _counting(monkeypatch)
+    assert _run_resume(origin, nodes, tmp_path).n == 3
+    assert calls == [3]
+    assert sorted(_numbers(tmp_path)) == [1, 2, 3]
+
+
+def test_truncated_last_line_is_dropped_and_rescored(
+    make_repo: Callable[[], RepoBuilder], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, nodes = _origin(make_repo)
+    scored = tmp_path / "out" / "o__r" / "scored.jsonl"
+    _seed(scored, load_policy(None), [_item(1), _item(2)], tail='{"number": 3, "sco')
+    calls = _counting(monkeypatch)
+    assert _run_resume(origin, nodes, tmp_path).n == 3
+    assert calls == [3]
+    assert sorted(_numbers(tmp_path)) == [1, 2, 3]
+    lines = scored.read_text().splitlines()
+    assert len(lines) == 4 and [json.loads(x)["number"] for x in lines[1:]] == [1, 2, 3]
+
+
+def test_bad_line_in_the_middle_starts_fresh(
+    make_repo: Callable[[], RepoBuilder], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, nodes = _origin(make_repo)
+    scored = tmp_path / "out" / "o__r" / "scored.jsonl"
+    _seed(scored, load_policy(None), [_item(1)], tail="garbage\n" + json.dumps(_item(2)) + "\n")
+    calls = _counting(monkeypatch)
+    assert _run_resume(origin, nodes, tmp_path).n == 3
+    assert sorted(calls) == [1, 2, 3]
