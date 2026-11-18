@@ -197,7 +197,7 @@ def build_brief(
         return _not_run("no API key")
     if not policy.llm.enabled:
         return _not_run("disabled in policy")
-    if any("documentation only" in note for note in result.notes):
+    if any(note.startswith("only documentation") for note in result.notes):
         return _not_run("documentation only")
     reading_files = [f.path for f in result.files if not f.skim]
     if not reading_files:

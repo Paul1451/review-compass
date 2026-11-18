@@ -63,3 +63,9 @@ def test_user_negation_cannot_cancel_builtin_or_guard() -> None:
     assert p.is_sensitive(".github/workflows/ci.yml")
     assert p.is_sensitive("src/auth/s.py")
     assert p.is_guard(".github/workflows/ci.yml")
+
+
+def test_default_fingerprint_is_pinned_to_weights_v1() -> None:
+    from review_compass.policy import Policy
+
+    assert Policy().fingerprint() == "eea628015697"

@@ -33,6 +33,11 @@ BUCKETS: tuple[Bucket, ...] = ("low", "medium", "high")
 MIN_AGENT_ROWS = 30
 PROGRESS_EVERY = 100
 INDEX_SAVE_EVERY = 200
+SCORING_RULES_VERSION = "1"
+"""Bump when classify, features, imports or scoring change what a pull request scores.
+
+It is part of the scored.jsonl resume header: a file with another or no version is discarded.
+"""
 
 
 class Row(BaseModel):
@@ -262,7 +267,7 @@ def _score_one(
 ) -> _Scored | None:
     try:
         features = extract_features(git, pr.to_meta(), policy, index)
-    except GitError:
+    except (GitError, OSError):
         return None
     result = score(features, policy)
     return _Scored(
@@ -298,7 +303,11 @@ def run_backtest(
     outcomes = label_outcomes(prs, git, "HEAD")
     todo = evaluable(prs, now)
 
-    header = {"policy_fingerprint": policy.fingerprint(), "tool_version": version("review-compass")}
+    header = {
+        "policy_fingerprint": policy.fingerprint(),
+        "tool_version": version("review-compass"),
+        "scoring_rules_version": SCORING_RULES_VERSION,
+    }
     scored_path = repo_out / "scored.jsonl"
     scored = _load_scored(scored_path, header)
     fresh = scored is None

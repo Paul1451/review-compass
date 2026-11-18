@@ -209,6 +209,7 @@ def test_resume_skips_scored_prs_and_restarts_on_policy_change(
     scored = out / "o__r" / "scored.jsonl"
     header = json.loads(scored.read_text().splitlines()[0])
     assert header["policy_fingerprint"] == policy.fingerprint() and "tool_version" in header
+    assert header["scoring_rules_version"] == metrics.SCORING_RULES_VERSION
 
     calls: list[int] = []
     real = metrics.extract_features
@@ -249,10 +250,21 @@ def test_outcomes_are_labelled_over_all_fetched_prs(
     assert {r["number"]: r["outcome"]["reverted"] for r in rows} == {1: True, 2: False, 3: False}
 
 
-def _seed(path: Path, policy: Any, items: list[dict[str, Any]], tail: str = "") -> None:
+def _seed(
+    path: Path,
+    policy: Any,
+    items: list[dict[str, Any]],
+    tail: str = "",
+    header_override: dict[str, str] | None = None,
+) -> None:
     from importlib.metadata import version
 
-    header = {"policy_fingerprint": policy.fingerprint(), "tool_version": version("review-compass")}
+    header = {
+        "policy_fingerprint": policy.fingerprint(),
+        "tool_version": version("review-compass"),
+        "scoring_rules_version": metrics.SCORING_RULES_VERSION,
+    }
+    header.update(header_override or {})
     lines = [json.dumps(header), *(json.dumps(i) for i in items)]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n" + tail)
@@ -320,3 +332,38 @@ def test_bad_line_in_the_middle_starts_fresh(
     calls = _counting(monkeypatch)
     assert _run_resume(origin, nodes, tmp_path).n == 3
     assert sorted(calls) == [1, 2, 3]
+
+
+def test_header_with_other_or_missing_scoring_rules_version_is_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy = load_policy(None)
+    path = tmp_path / "scored.jsonl"
+    header = {
+        "policy_fingerprint": policy.fingerprint(),
+        "tool_version": metrics.version("review-compass"),
+        "scoring_rules_version": metrics.SCORING_RULES_VERSION,
+    }
+    _seed(path, policy, [_item(1)])
+    assert metrics._load_scored(path, header) is not None
+    _seed(path, policy, [_item(1)], header_override={"scoring_rules_version": "0"})
+    assert metrics._load_scored(path, header) is None
+    old = {k: v for k, v in header.items() if k != "scoring_rules_version"}
+    path.write_text(json.dumps(old) + "\n" + json.dumps(_item(1)) + "\n")
+    assert metrics._load_scored(path, header) is None
+
+
+def test_oserror_while_scoring_one_pr_skips_it(
+    make_repo: Callable[[], RepoBuilder], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin, nodes = _origin(make_repo)
+
+    def boom(*args: Any) -> Any:
+        raise OSError("Argument list too long")
+
+    monkeypatch.setattr(metrics, "extract_features", boom)
+    report = run_backtest(
+        "o/r", 10, tmp_path / "out", tmp_path / "c", load_policy(None), FakeGH(nodes), NOW,
+        clone_url=str(origin.path),
+    )  # fmt: skip
+    assert report.n == 0

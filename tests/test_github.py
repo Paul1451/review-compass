@@ -341,3 +341,22 @@ def test_transport_error_becomes_github_error_status_0() -> None:
 def test_head_sha() -> None:
     client, rec = make({("GET", "/repos/o/r/pulls/5"): (200, {"head": {"sha": "abc"}})})
     assert client.head_sha(5) == "abc"
+
+
+def test_custom_base_url_keeps_token_on_that_host() -> None:
+    hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        link = '<https://api.github.com/repos/o/r/issues/5/comments?page=2>; rel="next"'
+        return httpx.Response(200, json=[], headers={"Link": link})
+
+    client = GitHubClient(
+        "tok",
+        "o/r",
+        base_url="https://ghe.example.com/api/v3",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(GitHubError, match="another host"):
+        client.upsert_comment(5, MARKER)
+    assert hosts == ["ghe.example.com"]

@@ -10,10 +10,10 @@ _MAX_READ_FIRST = 5
 _MAX_SKIM_PATHS = 8
 # C0/C1 controls, line/paragraph separators, bidi controls, zero-width characters, BOM.
 _INVISIBLE = re.compile(
-    "[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]"
+    "[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u061c\u200b-\u200f\ufeff]"
 )
 _WHITESPACE = re.compile(r"\s+")
-_MD_SPECIAL = re.compile(r"[\\`*_\[\]#!~|]")
+_MD_SPECIAL = re.compile(r"[\\`*_\[\]#!~|$]")
 _WWW = re.compile(r"www\.", re.IGNORECASE)
 _ZWSP = "\u200b"
 

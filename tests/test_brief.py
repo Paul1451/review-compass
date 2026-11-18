@@ -36,7 +36,7 @@ DOCS_RESULT = RiskResult(
     contributions=[],
     files=[FileRank(path="README.md", score=0, reasons=[], skim=True, span=None)],
     guard_touched=False,
-    notes=["documentation only"],
+    notes=["only documentation, generated files or lockfiles"],
 )
 P = load_policy(None)
 

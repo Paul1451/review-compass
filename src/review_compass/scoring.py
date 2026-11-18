@@ -165,7 +165,7 @@ def score(features: PRFeatures, policy: Policy) -> RiskResult:
             contributions=[],
             files=files,
             guard_touched=features.guard_touched,
-            notes=["documentation only"],
+            notes=["only documentation, generated files or lockfiles"],
         )
     contributions = _contributions(features, policy.weights)
     total = min(100, sum(c.points for c in contributions))

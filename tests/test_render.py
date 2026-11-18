@@ -140,6 +140,8 @@ HOSTILE = [
     ("see #12", "see \\#12"),
     ("visit www.evil.example", f"visit www{ZWSP}.evil.example"),
     ("a_b*c", "a\\_b\\*c"),
+    ("cost $x$ and $$y$$", "cost \\$x\\$ and \\$\\$y\\$\\$"),
+    ("a\u061cb", "ab"),
 ]
 
 

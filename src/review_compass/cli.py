@@ -10,6 +10,7 @@ import traceback
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from review_compass.backtest.history import _check_repo
 from review_compass.backtest.metrics import RepoReport, run_backtest
@@ -35,10 +36,14 @@ def _github_client() -> GitHubClient | None:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not repo:
         return None
+    kwargs: dict[str, Any] = {}
     bot_login = os.environ.get("REVIEW_COMPASS_BOT_LOGIN", "")
     if bot_login:
-        return GitHubClient(token, repo, bot_login=bot_login)
-    return GitHubClient(token, repo)
+        kwargs["bot_login"] = bot_login
+    api_url = os.environ.get("GITHUB_API_URL", "")
+    if api_url:  # GitHub Enterprise Server: the token goes to this host only
+        kwargs["base_url"] = api_url
+    return GitHubClient(token, repo, **kwargs)
 
 
 def _stdout_text(text: str) -> str:
@@ -97,7 +102,8 @@ def _cmd_score(args: argparse.Namespace) -> int:
             draft=False,
             is_fork=False,
         )
-        _, result, brief = analyze(repo, meta, policy, [], _brief_client())
+        client = None if args.no_llm else _brief_client()
+        _, result, brief = analyze(repo, meta, policy, [], client)
     except PolicyError as error:
         print(f"Invalid {POLICY_FILE} at {args.base}: {error}", file=sys.stderr)
         return 2
@@ -193,6 +199,11 @@ def _parser() -> argparse.ArgumentParser:
     score.add_argument("--head", required=True)
     score.add_argument("--repo-dir", default=".")
     score.add_argument("--json", action="store_true")
+    score.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="never call the model, even if ANTHROPIC_API_KEY is set",
+    )
     backtest = sub.add_parser("backtest", help="replay the score over merged PRs of repositories")
     backtest.add_argument("repos", nargs="+", metavar="OWNER/REPO")
     backtest.add_argument("--limit", type=int, default=2000)

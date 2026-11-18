@@ -158,7 +158,8 @@ def test_bucket_edges(kw: dict[str, Any], total: int, bucket: str) -> None:
 
 def test_docs_only_is_zero() -> None:
     r = score(feats(docs_only=True, effective_lines=0, agent_authored=True), P)
-    assert (r.score, r.bucket, r.contributions, r.notes) == (0, "low", [], ["documentation only"])
+    note = "only documentation, generated files or lockfiles"
+    assert (r.score, r.bucket, r.contributions, r.notes) == (0, "low", [], [note])
 
 
 def test_empty_pr_is_low() -> None:  # Review Focus 5

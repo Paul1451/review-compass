@@ -117,7 +117,7 @@ def test_rename_and_binary_do_not_crash(make_repo) -> None:
             [],
             "bot author: devin-ai-integration[bot]",
         ),
-        ({}, ["Co-authored-by: Claude Dupont <claude.dupont@gmail.com>"], None),
+        ({}, ["Co-authored-by: Claude Dupont <claude.dupont@example.com>"], None),
         ({}, ["Co-authored-by: Devin Smith <1234+devsmith@users.noreply.github.com>"], None),
         ({}, ["Co-authored-by: Julesz <julesz@example.com>"], None),
         ({"author": "codexter[bot]", "author_is_bot": True}, [], None),

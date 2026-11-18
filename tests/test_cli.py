@@ -102,6 +102,28 @@ def test_github_client_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     client = cli._github_client()
     assert isinstance(client, _Recorder)
     assert client.kwargs == {"bot_login": "me[bot]"}
+    monkeypatch.setenv("GITHUB_API_URL", "https://ghe.example.com/api/v3")
+    client = cli._github_client()
+    assert isinstance(client, _Recorder)
+    assert client.kwargs == {"bot_login": "me[bot]", "base_url": "https://ghe.example.com/api/v3"}
+
+
+def test_score_no_llm_never_builds_a_client(
+    make_repo: Callable[[], RepoBuilder],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def boom() -> None:
+        raise AssertionError("brief client must not be built")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(cli, "_brief_client", boom)
+    repo = make_repo()
+    base = repo.commit({"README.md": "a\n"})
+    head = repo.commit({"src/a.py": "x = 1\n"})
+    argv = ["score", "--base", base, "--head", head, "--repo-dir", str(repo.path), "--no-llm"]
+    assert cli.main(argv) == 0
+    assert "Review Compass" in capsys.readouterr().out
 
 
 def test_brief_client_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
