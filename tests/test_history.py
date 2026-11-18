@@ -239,3 +239,36 @@ def test_clone_goes_through_partial_dir(make_repo, tmp_path: Path) -> None:
     assert git.path == tmp_path / "repo.git" and (git.path / "HEAD").is_file()
     assert not stale.exists()
     assert git.ref_exists("HEAD")
+
+
+def test_dedupe_inside_loop_honours_limit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gh = FakeGH(
+        [page(range(5, 3, -1), "c1"), page(range(4, 2, -1), "c2"), page(range(2, 0, -1), None)]
+    )
+    prs = fetch_merged_prs(gh, "o/r", 4, tmp_path)
+    assert [p.number for p in prs] == [5, 4, 3, 2] and len(gh.calls) == 3
+    assert "dropped 1 duplicate" in capsys.readouterr().err
+
+
+def test_non_adjacent_duplicate_keeps_first_position(tmp_path: Path) -> None:
+    first = page(range(5, 3, -1), "c1")
+    second = page(range(3, 2, -1), None)
+    second["repository"]["pullRequests"]["nodes"].append(node(5))
+    prs = fetch_merged_prs(FakeGH([first, second]), "o/r", 10, tmp_path)
+    assert [p.number for p in prs] == [5, 4, 3]
+
+
+@pytest.mark.parametrize("end_cursor", [None, "same"])
+def test_pagination_must_advance(tmp_path: Path, end_cursor: str | None) -> None:
+    first = page(range(3, 2, -1), "same")
+    stuck = page(range(2, 1, -1), "x")
+    stuck["repository"]["pullRequests"]["pageInfo"] = {
+        "hasNextPage": True,
+        "endCursor": end_cursor,
+    }
+    with pytest.raises(GitHubError) as err:
+        fetch_merged_prs(FakeGH([first, stuck]), "o/r", 10, tmp_path)
+    assert "pagination did not advance" in str(err.value) and err.value.status == 200
+    assert not (tmp_path / "prs" / "page-1.json").exists()

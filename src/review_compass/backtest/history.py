@@ -116,9 +116,11 @@ def _parse_page(conn: Any) -> tuple[list[HistoricPR], bool, str | None]:
         raise TypeError("bad page")
     if end_cursor is not None and not isinstance(end_cursor, str):
         raise TypeError("bad cursor")
-    if has_next and end_cursor is None:
-        raise ValueError("missing cursor")
     return [_parse_node(n) for n in nodes if n is not None], has_next, end_cursor
+
+
+def _advances(has_next: bool, end_cursor: str | None, cursor: str | None) -> bool:
+    return not has_next or (end_cursor is not None and end_cursor != cursor)
 
 
 def _read_cached(
@@ -128,7 +130,8 @@ def _read_cached(
         stored = json.loads(path.read_text())
         if stored.get("repo") != repo or stored.get("cursor") != cursor:
             return None
-        return _parse_page(stored["data"])
+        parsed = _parse_page(stored["data"])
+        return parsed if _advances(parsed[1], parsed[2], cursor) else None
     except (OSError, *_SHAPE_ERRORS):
         return None
 
@@ -152,6 +155,8 @@ def fetch_merged_prs(
     _check_repo(repo)
     owner, name = repo.split("/")
     prs: list[HistoricPR] = []
+    seen: set[int] = set()
+    dropped = 0
     cursor: str | None = None
     index = 0
     while len(prs) < limit:
@@ -164,22 +169,26 @@ def fetch_merged_prs(
                 parsed = _parse_page(conn)
             except _SHAPE_ERRORS as exc:
                 raise GitHubError("unexpected pull request page shape", 200) from exc
+            if not _advances(parsed[1], parsed[2], cursor):
+                raise GitHubError("pagination did not advance", 200)
             _write_atomic(path, {"repo": repo, "cursor": cursor, "data": conn})
         page_prs, has_next, end_cursor = parsed
-        prs.extend(page_prs)
+        for pr in page_prs:
+            if pr.number in seen:
+                dropped += 1
+            else:
+                seen.add(pr.number)
+                prs.append(pr)
         if not has_next:
             break
         cursor = end_cursor
         index += 1
-    unique = list({pr.number: pr for pr in reversed(prs)}.values())
-    unique.reverse()
-    dropped = len(prs) - len(unique)
     if dropped:
         print(
             f"review-compass: dropped {dropped} duplicate pull request(s) while paging {repo}",
             file=sys.stderr,
         )
-    return unique[:limit]
+    return prs[:limit]
 
 
 def ensure_clone(repo: str, cache_dir: Path, *, url: str | None = None) -> GitRepo:
