@@ -72,6 +72,15 @@ _CONFIG_BASENAMES = frozenset(
         ".eslintignore",
         ".python-version",
         ".tool-versions",
+        ".flake8",
+        ".coveragerc",
+        ".browserslistrc",
+        ".gitkeep",
+        ".pylintrc",
+        ".yamllint",
+        ".markdownlint.json",
+        ".env.example",
+        "CODEOWNERS",
     }
 )
 

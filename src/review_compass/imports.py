@@ -22,7 +22,7 @@ _MAX_JS_BYTES = 1024 * 1024
 _JS_PATTERNS = (
     re.compile(r"""\bfrom\s*['"]([^'"\n]+)['"]"""),  # import … from / export … from
     re.compile(r"""\bimport\s*['"]([^'"\n]+)['"]"""),  # side-effect import
-    re.compile(r"""\bimport\s*\(\s*['"]([^'"\n]+)['"]"""),  # dynamic import('./x')
+    re.compile(r"""(?<![.\w$])import\s*\(\s*['"]([^'"\n]+)['"]"""),  # dynamic import('./x')
     re.compile(r"""\brequire\s*\(\s*['"]([^'"\n]+)['"]\s*\)"""),
 )
 
@@ -114,7 +114,10 @@ class ImportIndex:
         return {
             k: v
             for k, v in raw.items()
-            if isinstance(k, str) and isinstance(v, list) and all(isinstance(s, str) for s in v)
+            if isinstance(k, str)
+            and not k.startswith("js:")  # stale: written before dynamic imports were parsed
+            and isinstance(v, list)
+            and all(isinstance(s, str) for s in v)
         }
 
     def save(self) -> None:
@@ -185,7 +188,6 @@ class ImportIndex:
         stem, ext = posixpath.splitext(base)
         twins = [stem + t for t in _TS_TWINS.get(ext, ())]
         candidates = [t for t in twins if t in tree]
-        candidates += [base]
         candidates += [base + ext for ext in _JS_EXTENSIONS]
         candidates += [f"{base}/index{ext}" for ext in _JS_EXTENSIONS]
         return next((c for c in candidates if c in tree), None)

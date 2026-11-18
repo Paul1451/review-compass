@@ -34,6 +34,10 @@ from review_compass.models import FileKind
         ("assets/font.woff2", FileKind.GENERATED),
         ("tests/fixtures/img.png", FileKind.GENERATED),
         ("icon.svg", FileKind.SOURCE),
+        (".flake8", FileKind.CONFIG),
+        ("src/.gitkeep", FileKind.CONFIG),
+        (".github/CODEOWNERS", FileKind.CONFIG),
+        (".coveragerc", FileKind.CONFIG),
     ],
 )
 def test_classify(path: str, kind: FileKind) -> None:

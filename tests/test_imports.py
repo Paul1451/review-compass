@@ -1,6 +1,8 @@
 import json
 import warnings
 
+import pytest
+
 from review_compass.imports import ImportIndex
 
 
@@ -182,5 +184,25 @@ def test_old_format_js_cache_entry_is_ignored(make_repo, tmp_path) -> None:
     sha = b.repo.ls_tree(rev)["web/app.tsx"]
     cache = tmp_path / "blobs.json"
     cache.write_text(json.dumps({f"js:{sha}": []}), encoding="utf-8")
-    deps = ImportIndex(b.repo, cache).dependents(rev, ["web/lazy.ts"])
+    idx = ImportIndex(b.repo, cache)
+    deps = idx.dependents(rev, ["web/lazy.ts"])
     assert deps == {"web/lazy.ts": {"web/app.tsx"}}
+    idx.save()
+    assert f"js:{sha}" not in json.loads(cache.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "source,is_dependent",
+    [
+        ("db.import('./lazy')\n", False),
+        ("$import('./lazy')\n", False),
+        ("await import('./lazy')\n", True),
+        ("x = (import('./lazy'))\n", True),
+        ('x =import("./lazy")\n', True),
+    ],
+)
+def test_dynamic_import_excludes_method_calls(make_repo, source: str, is_dependent: bool) -> None:
+    b = make_repo()
+    rev = b.commit({"web/app.ts": source, "web/lazy.ts": "export const l = 1\n"})
+    deps = ImportIndex(b.repo).dependents(rev, ["web/lazy.ts"])
+    assert deps == {"web/lazy.ts": {"web/app.ts"} if is_dependent else set()}
