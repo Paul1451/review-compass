@@ -43,9 +43,10 @@ reporting and documentation, so the published numbers still describe the code.
 Status: the action has been tested against mocked GitHub API responses and
 throwaway git repositories. It has also run in GitHub Actions on one private
 repository: two pull request runs on 2026-11-18, about 23 seconds each. On the
-second run the comment was updated in place and the label was replaced. Not yet
-exercised in a live run: auto-approval, the intent check with an API key, and
-creating labels in a repository where they do not exist yet. See
+second run the comment was updated in place and the label was replaced. On
+2026-11-19 it ran on a pull request in this repository, where it created the
+missing `review:low` label itself. Not yet exercised in a live run:
+auto-approval and the intent check with an API key. See
 [Field test](#field-test-one-repository) for what that one repository showed.
 
 ## Contents
@@ -188,9 +189,7 @@ Notes:
   `pull_request` workflows at all, so agents that open pull requests that way
   get no comment.
 - Labels are created on first use and get GitHub's default colour unless you
-  create `review:low`, `review:medium` and `review:high` beforehand. Creating
-  them in a repository where they do not exist yet has not been exercised in a
-  live run.
+  create `review:low`, `review:medium` and `review:high` beforehand.
 
 ### Versions and pinning
 
