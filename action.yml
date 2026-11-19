@@ -20,7 +20,13 @@ runs:
   using: composite
   steps:
     # setup-uv is pinned by commit SHA (v10.3.3); the package itself is installed from uv.lock.
+    # Without `version` and `cache-dependency-glob` setup-uv looks for pyproject.toml / uv.lock in
+    # the calling repository: it then warns on every run of a non-Python repository and falls
+    # back to the latest uv. Both inputs point it at this action instead.
     - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      with:
+        version: "0.13.9"
+        cache-dependency-glob: ${{ github.action_path }}/uv.lock
     - name: Install Review Compass from uv.lock
       shell: bash
       run: uv sync --locked --no-dev --project "$GITHUB_ACTION_PATH"
