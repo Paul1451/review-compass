@@ -97,3 +97,68 @@ def render_comment(result: RiskResult, brief: Brief) -> str:
         lines += ["", f"<sub>Notes: {joined}</sub>"]
 
     return "\n".join(lines) + "\n"
+
+
+def _plain(text: str) -> str:
+    """Make untrusted text safe for a terminal: collapse whitespace, drop control characters."""
+    return _INVISIBLE.sub("", _WHITESPACE.sub(" ", text).strip())
+
+
+def _plain_path(path: str) -> str:
+    return _plain(path) or "(unnamed)"
+
+
+def _intent_plain(brief: Brief) -> str:
+    intent = brief.intent
+    if intent.status == "not_run":
+        return f"not run ({_plain(intent.note)})"
+    if intent.status == "no_issue":
+        return "no linked issue"
+    return _plain(intent.note)
+
+
+def render_text(result: RiskResult, brief: Brief) -> str:
+    """Plain-text rendering of the comment for reading in a terminal."""
+    lines = [f"Review Compass: {result.bucket.upper()} ({result.score}/100)", "", "Why"]
+    if result.contributions:
+        lines.extend(f"  {c.points:+d}  {_plain(c.reason)}" for c in result.contributions)
+    else:
+        lines.append("  nothing notable")
+
+    lines += ["", "Intent check", f"  {_intent_plain(brief)}"]
+
+    read_first = [f for f in result.files if not f.skim]
+    skim = [f for f in result.files if f.skim]
+
+    if read_first:
+        shown = read_first[:_MAX_READ_FIRST]
+        notes: dict[str, str] = {}
+        for note in brief.reading_notes:
+            why = _plain(note.why)
+            if why:
+                notes.setdefault(note.path, why)
+        lines += ["", "Read first"]
+        for i, rank in enumerate(shown, start=1):
+            label = _plain_path(rank.path)
+            if rank.span is not None:
+                label += f":{rank.span[0]}-{rank.span[1]}"
+            line = f"  {i}. {label}"
+            if rank.path in notes:
+                line += f" — {notes[rank.path]}"
+            lines.append(line)
+        extra = len(read_first) - len(shown)
+        if extra > 0:
+            lines.append(f"  ...and {extra} more changed files")
+
+    if skim:
+        noun = "file" if len(skim) == 1 else "files"
+        listed = ", ".join(_plain_path(f.path) for f in skim[:_MAX_SKIM_PATHS])
+        more = len(skim) - _MAX_SKIM_PATHS
+        if more > 0:
+            listed += f", ...and {more} more"
+        lines += ["", f"Skim ({len(skim)} {noun})", f"  {listed}"]
+
+    if result.notes:
+        lines += ["", "Notes: " + "; ".join(_plain(n) for n in result.notes)]
+
+    return "\n".join(lines) + "\n"

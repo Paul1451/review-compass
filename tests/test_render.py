@@ -10,7 +10,7 @@ from review_compass.models import (
     ReadingNote,
     RiskResult,
 )
-from review_compass.render import MARKER, render_comment
+from review_compass.render import MARKER, render_comment, render_text
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -214,3 +214,87 @@ def test_bidi_and_zero_width_chars_are_removed_from_paths() -> None:
     assert "1. `abc.py`" in out
     assert "2. `(unnamed)`" in out
     assert "‮" not in out
+
+
+def test_text_layout_is_plain() -> None:
+    result = RiskResult(
+        score=66,
+        bucket="high",
+        contributions=[
+            Contribution(
+                signal="sensitive_path",
+                points=25,
+                reason="touches sensitive path: src/auth.py (+1 more)",
+            ),
+            Contribution(signal="no_tests", points=18, reason="source changed, no test changes"),
+        ],
+        files=[
+            *[_rank(f"src/f{i}.py", span=(10, 20) if i == 0 else None) for i in range(8)],
+            _rank("a.lock", skim=True),
+            _rank("db/0011_account_deletion.sql", skim=True),
+        ],
+        guard_touched=False,
+        notes=["dependents: only measured for Python, JavaScript and TypeScript files"],
+    )
+    brief = Brief(
+        intent=IntentCheck(status="not_run", note="no API key"),
+        reading_notes=[ReadingNote(path="src/f0.py", why="the `core` change")],
+    )
+    out = render_text(result, brief)
+    assert out == (
+        "Review Compass: HIGH (66/100)\n"
+        "\n"
+        "Why\n"
+        "  +25  touches sensitive path: src/auth.py (+1 more)\n"
+        "  +18  source changed, no test changes\n"
+        "\n"
+        "Intent check\n"
+        "  not run (no API key)\n"
+        "\n"
+        "Read first\n"
+        "  1. src/f0.py:10-20 \u2014 the `core` change\n"
+        "  2. src/f1.py\n"
+        "  3. src/f2.py\n"
+        "  4. src/f3.py\n"
+        "  5. src/f4.py\n"
+        "  ...and 3 more changed files\n"
+        "\n"
+        "Skim (2 files)\n"
+        "  a.lock, db/0011_account_deletion.sql\n"
+        "\n"
+        "Notes: dependents: only measured for Python, JavaScript and TypeScript files\n"
+    )
+    assert MARKER not in out
+    assert "\\_" not in out and "##" not in out and "**" not in out and "<sub>" not in out
+
+
+def test_text_nothing_notable_and_no_issue() -> None:
+    result = RiskResult(
+        score=0, bucket="low", contributions=[], files=[], guard_touched=False, notes=[]
+    )
+    brief = Brief(intent=IntentCheck(status="no_issue", note=""), reading_notes=[])
+    assert render_text(result, brief) == (
+        "Review Compass: LOW (0/100)\n\nWhy\n  nothing notable\n\nIntent check\n"
+        "  no linked issue\n"
+    )
+
+
+def test_text_strips_terminal_escapes_and_collapses_whitespace() -> None:
+    evil = "x\x1b[31m\nred\u202e @a https://e.com"
+    result = RiskResult(
+        score=5,
+        bucket="low",
+        contributions=[Contribution(signal="s", points=5, reason=f"why {evil}")],
+        files=[_rank(f"p{evil}.py"), _rank(f"q{evil}.lock", skim=True)],
+        guard_touched=False,
+        notes=[f"note {evil}"],
+    )
+    brief = Brief(
+        intent=IntentCheck(status="unclear", note=f"intent {evil}"),
+        reading_notes=[ReadingNote(path=f"p{evil}.py", why=f"why {evil}")],
+    )
+    out = render_text(result, brief)
+    assert "\x1b" not in out and "\u202e" not in out and "\u200b" not in out
+    assert "x[31m red @a https://e.com" in out
+    assert "&amp;" not in out and "\\" not in out
+    assert all(ch == "\n" or ch >= " " for ch in out)

@@ -126,6 +126,51 @@ def test_score_no_llm_never_builds_a_client(
     assert "Review Compass" in capsys.readouterr().out
 
 
+def _score_argv(repo: RepoBuilder, base: str, head: str, *extra: str) -> list[str]:
+    return [
+        "score",
+        "--base",
+        base,
+        "--head",
+        head,
+        "--repo-dir",
+        str(repo.path),
+        "--no-llm",
+        *extra,
+    ]
+
+
+def test_score_formats(
+    make_repo: Callable[[], RepoBuilder], capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = make_repo()
+    base = repo.commit({"README.md": "a\n"})
+    head = repo.commit({"src/a.py": "x = 1\n", "db/0011_account_deletion.sql": "select 1;\n"})
+
+    def run(*extra: str) -> str:
+        assert cli.main(_score_argv(repo, base, head, *extra)) == 0
+        return capsys.readouterr().out
+
+    default = run()
+    assert default == run("--format", "text")
+    assert default.startswith("Review Compass: ") and "##" not in default and "**" not in default
+    assert "0011_account_deletion.sql" in default
+    markdown = run("--format", "markdown")
+    assert markdown.startswith("<!-- review-compass -->\n## Review Compass")
+    as_json = run("--format", "json")
+    assert json.loads(as_json)["score"] is not None
+    assert run("--json") == as_json
+
+
+def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    from importlib.metadata import version
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out == f"review-compass {version('review-compass')}\n"
+
+
 def test_brief_client_env_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "AnthropicBriefClient", _Recorder)
     assert cli._brief_client() is None

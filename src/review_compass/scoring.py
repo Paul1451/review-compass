@@ -39,14 +39,19 @@ def _first_hotspot(features: PRFeatures) -> str | None:
     return best.change.path if best is not None else None
 
 
-def _contributions(features: PRFeatures, w: Weights) -> list[Contribution]:
+def _contributions(
+    features: PRFeatures, w: Weights, files: list[FileRank]
+) -> list[Contribution]:
     sensitive = [f for f in features.files if f.sensitive]
+    sensitive_paths = {f.change.path for f in sensitive}
+    # Name the sensitive file a reviewer meets first (reading order), not diff order.
+    first_sensitive = next((r.path for r in files if r.path in sensitive_paths), None)
     n_dep = features.dependents_total or 0
     entries: list[tuple[str, int, str]] = []
 
     reason = ""
-    if sensitive:
-        reason = f"touches sensitive path: {sensitive[0].change.path}"
+    if sensitive and first_sensitive is not None:
+        reason = f"touches sensitive path: {first_sensitive}"
         if len(sensitive) > 1:
             reason += f" (+{len(sensitive) - 1} more)"
     entries.append(("sensitive_path", _points(w.sensitive_path, 1 if sensitive else 0), reason))
@@ -167,11 +172,11 @@ def score(features: PRFeatures, policy: Policy) -> RiskResult:
             guard_touched=features.guard_touched,
             notes=["only documentation, generated files or lockfiles"],
         )
-    contributions = _contributions(features, policy.weights)
+    contributions = _contributions(features, policy.weights, files)
     total = min(100, sum(c.points for c in contributions))
     notes: list[str] = []
     if features.dependents_total is None and features.source_changed:
-        notes.append("dependents: not measured (unsupported language)")
+        notes.append("dependents: only measured for Python, JavaScript and TypeScript files")
     return RiskResult(
         score=total,
         bucket=_bucket(total, policy),

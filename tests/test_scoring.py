@@ -175,7 +175,16 @@ def test_clamped_to_100_and_custom_weights() -> None:
 
 def test_unmeasured_dependents_note() -> None:
     r = score(feats(dependents_total=None, source_changed=True), P)
-    assert "dependents: not measured (unsupported language)" in r.notes
+    assert "dependents: only measured for Python, JavaScript and TypeScript files" in r.notes
+    assert not any("unsupported" in n or "not measured" in n for n in r.notes)
+
+
+def test_unmeasured_note_matches_supported_extensions() -> None:
+    from review_compass.imports import SUPPORTED_EXTENSIONS
+
+    assert ".py" in SUPPORTED_EXTENSIONS
+    assert {".js", ".ts"} <= set(SUPPORTED_EXTENSIONS)
+    assert not any(e in SUPPORTED_EXTENSIONS for e in (".sql", ".go", ".rs", ".java"))
 
 
 def test_file_ranking_and_skim() -> None:
@@ -312,3 +321,44 @@ def test_zero_weight_hotspot_drops_signal_and_file_points() -> None:
 
 def test_no_unmeasured_note_when_dependents_zero() -> None:
     assert score(feats(dependents_total=0, source_changed=True), P).notes == []
+
+
+def _workflow_and_auth(order: int = 1) -> PRFeatures:
+    files = [
+        file_feat(".github/workflows/ci.yml", kind=FileKind.CONFIG, sensitive=True, lines=3),
+        file_feat("src/auth.py", sensitive=True, dependents=7, lines=20),
+    ][::order]
+    return feats(files=files, source_changed=True, dependents_total=7, effective_lines=23)
+
+
+def test_sensitive_reason_names_first_file_in_reading_order() -> None:
+    r = score(_workflow_and_auth(), P)
+    assert _reason(r, "sensitive_path") == "touches sensitive path: src/auth.py (+1 more)"
+    assert r.files[0].path == "src/auth.py"
+
+
+def test_sensitive_reason_independent_of_input_order() -> None:
+    a = score(_workflow_and_auth(1), P)
+    b = score(_workflow_and_auth(-1), P)
+    assert _reason(a, "sensitive_path") == _reason(b, "sensitive_path")
+    assert (a.score, a.contributions) == (b.score, b.contributions)
+
+
+def test_scores_pinned_before_sensitive_reason_change() -> None:
+    # Values taken from the code before the reason text change; points must never move.
+    r = score(_workflow_and_auth(), P)
+    assert (r.score, [(c.signal, c.points) for c in r.contributions]) == (
+        63,
+        [("sensitive_path", 25), ("no_tests", 18), ("dependents", 15), ("size", 5)],
+    )
+    many = [file_feat(p, sensitive=True) for p in ("auth/a.py", "auth/b.py", "auth/c.py")]
+    r = score(feats(files=many), P)
+    assert (r.score, [(c.signal, c.points) for c in r.contributions]) == (
+        25,
+        [("sensitive_path", 25)],
+    )
+    r = score(feats(files=SENS, max_churn=9, directories=2), P)
+    assert (r.score, [(c.signal, c.points) for c in r.contributions]) == (
+        35,
+        [("sensitive_path", 25), ("hotspot", 9), ("spread", 1)],
+    )

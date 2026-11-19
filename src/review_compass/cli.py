@@ -9,6 +9,7 @@ import sys
 import traceback
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from importlib.metadata import version as _dist_version
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from review_compass.gitrepo import GitError, GitRepo
 from review_compass.live import analyze, run_pr
 from review_compass.models import PRMeta
 from review_compass.policy import POLICY_FILE, PolicyError, load_policy
-from review_compass.render import render_comment
+from review_compass.render import render_comment, render_text
 
 MAX_LIMIT = 20_000
 
@@ -110,7 +111,13 @@ def _cmd_score(args: argparse.Namespace) -> int:
     except GitError as error:
         print(error, file=sys.stderr)
         return 2
-    print(result.model_dump_json(indent=2) if args.json else render_comment(result, brief))
+    fmt = "json" if args.json else args.format
+    if fmt == "json":
+        print(result.model_dump_json(indent=2))
+    elif fmt == "markdown":
+        print(render_comment(result, brief))
+    else:
+        print(render_text(result, brief))
     return 0
 
 
@@ -190,6 +197,9 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="review-compass")
+    parser.add_argument(
+        "--version", action="version", version=f"review-compass {_dist_version('review-compass')}"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     pr = sub.add_parser("pr", help="handle one pull_request event (GitHub Action)")
     pr.add_argument("--event", default=None)
@@ -198,7 +208,13 @@ def _parser() -> argparse.ArgumentParser:
     score.add_argument("--base", required=True)
     score.add_argument("--head", required=True)
     score.add_argument("--repo-dir", default=".")
-    score.add_argument("--json", action="store_true")
+    score.add_argument(
+        "--format",
+        choices=("text", "markdown", "json"),
+        default="text",
+        help="output format (default: text)",
+    )
+    score.add_argument("--json", action="store_true", help="alias for --format json")
     score.add_argument(
         "--no-llm",
         action="store_true",
