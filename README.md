@@ -41,19 +41,26 @@ before the first full backtest run. Later commits only touch approval logic,
 reporting and documentation, so the published numbers still describe the code.
 
 Status: the action has been tested against mocked GitHub API responses and
-throwaway git repositories, not yet in a live GitHub Actions run.
+throwaway git repositories. It has also run in GitHub Actions on one private
+repository: two pull request runs on 2026-11-18, about 23 seconds each. On the
+second run the comment was updated in place and the label was replaced. Not yet
+exercised in a live run: auto-approval, the intent check with an API key, and
+creating labels in a repository where they do not exist yet. See
+[Field test](#field-test-one-repository) for what that one repository showed.
 
 ## Contents
 
 - [The problem](#the-problem)
 - [Example comment](#example-comment)
 - [Install](#install)
+  - [Versions and pinning](#versions-and-pinning)
 - [Policy file](#policy-file-review-compassyml)
 - [Local use](#local-use)
 - [How the score works](#how-the-score-works)
 - [Auto-approval](#auto-approval)
 - [Backtest](#backtest)
 - [Limits](#limits)
+  - [Field test (one repository)](#field-test-one-repository)
 - [Security notes](#security-notes)
 
 ## The problem
@@ -74,7 +81,7 @@ measures; see above for the outcome.
 
 ## Example comment
 
-This is the unmodified output of `review-compass score --no-llm` on a small
+This is the unmodified output of `review-compass score --no-llm --format markdown` on a small
 throwaway repository (Python files, one change to an `auth` path, source
 changes without tests, one importer of the changed module, one documentation
 file). It is not from a real pull request.
@@ -135,7 +142,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: Paul1451/review-compass@main
+      - uses: Paul1451/review-compass@v0
         with:
           # Optional. Without it the score runs as usual, only the intent check is skipped.
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -154,13 +161,17 @@ Notes:
   `edited` trigger re-runs the check when a pull request is retargeted to
   another base branch.
 - What is pinned: the action installs Review Compass and its Python
-  dependencies from the committed `uv.lock` (`uv sync --locked`), so they do
-  not change between runs, and `astral-sh/setup-uv` is pinned by commit SHA in
-  `action.yml`. What is not: the version of `uv` itself, and
-  `Paul1451/review-compass@main` in the snippet above, which is a moving
-  branch. The action runs with a token that can write to pull requests, so use
-  a commit SHA (`Paul1451/review-compass@<full-sha>`) instead of `@main`, and
-  pin `actions/checkout` by SHA as shown.
+  dependencies from its own committed `uv.lock` (`uv sync --locked`), so they
+  do not change between runs, `astral-sh/setup-uv` is pinned by commit SHA in
+  `action.yml`, and the action pins its own `uv` version and caches against
+  its own `uv.lock`. It does not read `pyproject.toml` or `uv.lock` of the
+  calling repository
+  ([issue #3](https://github.com/Paul1451/review-compass/issues/3)). What is
+  not pinned: `@v0` in the snippet above, which is a moving tag (see
+  [Versions and pinning](#versions-and-pinning)). The action runs with a token
+  that can write to pull requests, so consider a full commit SHA
+  (`Paul1451/review-compass@<full-sha>`), and pin `actions/checkout` by SHA as
+  shown.
 - Inputs: `anthropic-api-key` (optional), `github-token` (default
   `github.token`), `bot-login` (login of the account that posts, default
   `github-actions[bot]`; needed when a different token identity is used).
@@ -177,7 +188,31 @@ Notes:
   `pull_request` workflows at all, so agents that open pull requests that way
   get no comment.
 - Labels are created on first use and get GitHub's default colour unless you
-  create `review:low`, `review:medium` and `review:high` beforehand.
+  create `review:low`, `review:medium` and `review:high` beforehand. Creating
+  them in a repository where they do not exist yet has not been exercised in a
+  live run.
+
+### Versions and pinning
+
+There are three ways to reference the action:
+
+- `Paul1451/review-compass@v0`: a moving tag that follows the newest 0.x
+  release.
+- An exact release tag such as `Paul1451/review-compass@v0.1.0`.
+- A full commit SHA (`Paul1451/review-compass@<full-sha>`): the strictest.
+
+`@main` also works but can change at any time.
+
+From the first release on, the history of `main` and of release tags will not
+be rewritten. It was rewritten once, on 2026-11-18, before the first release
+(author metadata only, file contents identical). Commit SHAs from before that
+date no longer exist, so workflows pinned to one fail with "unable to find
+version"
+([issue #2](https://github.com/Paul1451/review-compass/issues/2)).
+
+If you use the action from a private copy or fork, the action repository must
+allow access from the calling repository under *Settings › Actions › General ›
+Access*. Otherwise the run fails with "repository not found".
 
 ## Policy file (`.review-compass.yml`)
 
@@ -222,22 +257,67 @@ Sensitive paths:
 - Guard paths `.review-compass.yml` and `.github/workflows/**` are always
   sensitive and cannot be turned off.
 
+A second example, for a TypeScript monorepo with Drizzle:
+
+```yaml
+sensitive_paths:
+  - "packages/db/drizzle/*.sql"      # SQL migrations (Drizzle does not use a migrations/ directory)
+  - "packages/db/src/schema/**"      # table definitions
+  - "**/payments.ts"                 # payment logic
+  - "**/totals.ts"                   # money and tax arithmetic
+  - "**/export/**"                   # accounting exports
+weights:
+  agent: 0                           # switch a signal off if it fires on almost every pull request
+```
+
+Why this matters: the built-in sensitive paths know common names (auth,
+`migrations/`, workflows, Dockerfile, package manifests, see the list above)
+but not the domain-critical files of a given project. In the field test, money,
+export and migration changes were rated too low until such a policy file was
+added ([issue #5](https://github.com/Paul1451/review-compass/issues/5)).
+
+Current gap: there is no way yet to exclude generated files (for example
+Drizzle `meta/*_snapshot.json`) from the size signal or the reading order
+([issue #4](https://github.com/Paul1451/review-compass/issues/4)).
+
 Label names are fixed (`review:low`, `review:medium`, `review:high`) and not
 configurable in this version. `llm.max_input_tokens` is approximate: the
 message to the model is cut to 4 characters per token.
 
 ## Local use
 
-Score a revision range in a local checkout without GitHub:
+Score a revision range in a local checkout without GitHub.
+
+Try it without installing:
 
 ```sh
-uvx --from git+https://github.com/Paul1451/review-compass \
-  review-compass score --base origin/main --head HEAD
+uvx --from git+https://github.com/Paul1451/review-compass@v0 \
+  review-compass score --base main --head HEAD --no-llm
 ```
 
-Add `--json` for the machine-readable result and `--repo-dir PATH` to point at
-another checkout. git 2.30 or newer is required. The policy is read from the
-`--base` revision. Use
+`uvx` resolves dependencies fresh and does not use the project's `uv.lock`.
+For a reproducible install, clone the repository, run `uv sync --locked`, then
+call `uv run review-compass ...`.
+
+```sh
+git clone https://github.com/Paul1451/review-compass
+cd review-compass
+uv sync --locked
+uv run review-compass score --repo-dir /path/to/your/checkout \
+  --base origin/main --head HEAD --no-llm
+```
+
+`review-compass --version` prints the installed version.
+
+Output format: `score --format text|markdown|json`.
+
+- `text` is the default. It is meant for reading in a terminal and has no
+  Markdown escapes.
+- `markdown` prints the comment exactly as the action posts it.
+- `json` (or `--json`) prints the full result.
+
+Use `--repo-dir PATH` to point at another checkout. git 2.30 or newer is
+required. The policy is read from the `--base` revision. Use
 `--no-llm` to be sure nothing leaves your machine: without it, if
 `ANTHROPIC_API_KEY` is set in your shell, the reading-list notes are generated
 by the model and the diff of the top-ranked files is sent to the Anthropic API.
@@ -564,6 +644,47 @@ cache directory first.
   changed files that the argument list exceeds the operating system limit
   cannot be scored: the action fails (and withdraws its own earlier approval),
   and the backtest skips that pull request.
+
+### Field test (one repository)
+
+The action was tried on one private TypeScript monorepo (an invoicing
+application with an `apps/` and `packages/` layout and Drizzle migrations) on
+2026-11-18. The analysis was done by an AI assistant on behalf of the author
+and was not independently verified by a person. Findings were filed as issues
+[#1](https://github.com/Paul1451/review-compass/issues/1) to
+[#8](https://github.com/Paul1451/review-compass/issues/8).
+
+The test was 10 local scorings of historical commits and open pull requests,
+plus 2 live runs of the action. The reviewer judged 6 of the 10 local results
+plausible. One repository, judged by an AI assistant, not verified by a person:
+an anecdote, not a measurement.
+
+Known wrong behaviours:
+
+- [#1](https://github.com/Paul1451/review-compass/issues/1): author familiarity
+  compares commit e-mail addresses only, so a person who commits with two
+  addresses counts as unfamiliar with their own files.
+- [#4](https://github.com/Paul1451/review-compass/issues/4): a change that only
+  adds a comment line to a source file is scored like a code change (the
+  no-tests, dependents and hotspot signals all fire), and generated files and
+  large fixtures count towards size.
+- [#5](https://github.com/Paul1451/review-compass/issues/5): a sensitive path
+  alone adds 25 points and therefore stays LOW, and major version bumps of a
+  database driver or runtime by a dependency bot were rated LOW.
+- [#7](https://github.com/Paul1451/review-compass/issues/7): the no-tests
+  signal is switched off by any changed line in any test file, deleting tests
+  is not a signal, and the built-in `auth` pattern also matches test files.
+- [#8](https://github.com/Paul1451/review-compass/issues/8): a one-line change
+  to a critical file cannot reach HIGH even with a policy file, because the
+  sensitive-path signal is a flat 25 points and HIGH starts at 60.
+- [#6](https://github.com/Paul1451/review-compass/issues/6): on that
+  repository, lines changed alone ranked changes about as well as the full
+  score (reported AUC 0.88 for size alone versus 0.84 for the score, 76
+  commits, a label built from lines later touched by fix commits; single
+  repository, not reproduced in this repository's backtest).
+
+None of these are fixed in the scoring rules yet. The rules are unchanged since
+tag `weights-v1`, and any change to them will come with a rerun of the backtest.
 
 ## Security notes
 
